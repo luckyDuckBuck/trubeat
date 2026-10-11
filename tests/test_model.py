@@ -123,3 +123,17 @@ def test_to_label_mapping():
     assert _to_label(1) == "real"
     assert _to_label(0) == "fake"
     assert _to_label(True) == "real"
+
+
+def test_predict_video_raises_no_face_when_never_tracked():
+    """A faceless video must raise the designed E_NO_FACE, not crash in sklearn."""
+    from trubeat.errors import NoFace
+
+    patches, stream, landmarks, valid, hr_res = _mock_stages(valid_frac=0.0)
+    model = MagicMock()
+    with patches[0] as m_ing, patches[1] as m_face:
+        m_ing.open_video.return_value = stream
+        m_face.track_landmarks.return_value = (landmarks, valid)
+        with pytest.raises(NoFace) as exc_info:
+            predict_video("vid.mp4", model, {})
+    assert exc_info.value.code == "E_NO_FACE"

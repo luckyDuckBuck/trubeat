@@ -118,3 +118,27 @@ def test_ppg_map_short_input():
     maps = build_ppg_maps(np.zeros((100, 3)), FPS)
     assert maps.shape[0] == 3
     assert maps.shape[2] == 0
+
+
+def test_window_features_interpolates_nan_gaps():
+    """Dropped frames (NaN rows, e.g. green-method path) must not poison windows."""
+    n = 750
+    t = np.arange(n) / 30.0
+    ppg = np.column_stack([np.sin(2 * np.pi * 1.2 * t + p) for p in (0.0, 0.1, 0.2)])
+    ppg[100:120] = np.nan  # simulated dropped frames
+    feat = window_features(ppg, 30.0)
+    assert len(feat) == 4  # 25 s, 10 s windows, 50% overlap
+    vals = feat.drop(columns=["win_start_s", "win_end_s"]).to_numpy()
+    assert np.all(np.isfinite(vals))
+
+
+def test_window_features_all_nan_column_gives_zeros():
+    """A column with no usable signal at all → finite zero features, never NaN."""
+    n = 750
+    t = np.arange(n) / 30.0
+    ppg = np.column_stack(
+        [np.sin(2 * np.pi * 1.2 * t), np.full(n, np.nan), np.sin(2 * np.pi * 1.2 * t)]
+    )
+    feat = window_features(ppg, 30.0)
+    vals = feat.drop(columns=["win_start_s", "win_end_s"]).to_numpy()
+    assert np.all(np.isfinite(vals))
