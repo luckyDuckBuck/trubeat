@@ -9,7 +9,7 @@
                     +--------+----------+
                              |
                     +--------v----------+
-                    |    PulseFake      |
+                    |    TrueBeat      |
                     |    pipeline       |
                     +--------+----------+
                              |
@@ -138,8 +138,8 @@ def evaluate_detector(manifest, model) -> DetectionReport  # acc, AUC, PR, confu
 ## 6. Storage layout
 
 ```
-pulsefake/
-  src/pulsefake/{ingest,face,roi,signal,hr,consistency,features,model,eval,serve}.py
+trubeat/
+  src/trubeat/{ingest,face,roi,signal,hr,consistency,features,model,eval,serve}.py
   configs/{p1_hr.yaml, p2_detector.yaml, p3_cnn.yaml}
   data/
     raw/{ubfc_rppg, ffpp_c23, celebdf_v2}/   # DVC-tracked, never in git
@@ -152,7 +152,7 @@ pulsefake/
 
 ## 7. Deployment views
 
-- **Phases 1–3 (dev):** laptop, `uv run pulsefake …`, MLflow local, DVC local.
+- **Phases 1–3 (dev):** laptop, `uv run trubeat …`, MLflow local, DVC local.
 - **Phase 4 (service):** Docker image (`python:3.11-slim`, headless OpenCV,
   model weights baked in) → `uvicorn serve:app`; Gradio demo on the same host.
   Still offline-capable: no external calls in the request path.

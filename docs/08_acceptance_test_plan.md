@@ -45,7 +45,7 @@ by accident.
 
 ## 4. System-level checks (Phase 4)
 
-- `pulsefake predict` on a 10 s clip finishes in ≤ 60 s on the reference laptop.
+- `trubeat predict` on a 10 s clip finishes in ≤ 60 s on the reference laptop.
 - All six error codes (`E_UNREADABLE`, `E_LOW_FPS`, `E_SHORT_VIDEO`, `E_NO_FACE`,
   `W_UNSTABLE_TRACK`, `W_LOW_CONFIDENCE`) trigger correctly on crafted inputs.
 - Inference path makes zero network calls (verified with a blocked-network run).

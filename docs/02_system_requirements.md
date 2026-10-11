@@ -59,14 +59,14 @@
 | NFR-03 | **Robustness:** no-face frames, short videos, and corrupt files produce explicit error codes (`E_NO_FACE`, `E_SHORT_VIDEO`, …), never silent NaNs. |
 | NFR-04 | **Privacy:** local-only by default. The inference path makes zero network calls. Dataset face images are never committed to version control. |
 | NFR-05 | **Reproducibility:** seeded RNGs, locked dependencies (`uv.lock`), DVC-tracked data, every run logged to MLflow with its config hash. |
-| NFR-06 | **Usability:** `pulsefake --help` documents every command; `pulsefake eval --dataset ubfc` reproduces the headline numbers in one command. |
+| NFR-06 | **Usability:** `trubeat --help` documents every command; `trubeat eval --dataset ubfc` reproduces the headline numbers in one command. |
 | NFR-07 | **Maintainability:** typed Python, one module per pipeline stage, pytest coverage on all signal-math functions. |
 | NFR-08 | **No identity leakage:** no subject (or FF++ real/fake pair from one source video) may appear on both sides of a train/test split. Enforced by group-aware splitting and a CI check on manifests. |
 
 ## 3. Interfaces
 
-- **CLI:** `pulsefake hr <video>`, `pulsefake train --manifest …`, `pulsefake predict <video>`, `pulsefake eval --dataset …`.
-- **Python API:** `pulsefake.pipeline.{extract_traces, estimate_hr, predict_video}`.
+- **CLI:** `trubeat hr <video>`, `trubeat train --manifest …`, `trubeat predict <video>`, `trubeat eval --dataset …`.
+- **Python API:** `trubeat.pipeline.{extract_traces, estimate_hr, predict_video}`.
 - **REST (P4):** `POST /predict` multipart video → FR-12 JSON; `GET /health`.
 - **Manifest CSV schema:** `video_id, subject_id, source_video_id, label, split_group, dataset, quality, fps, duration_s, path`.
 - **Trace cache:** NumPy `.npy` / Parquet keyed by content hash of (video bytes + ROI definition + method).

@@ -1,4 +1,4 @@
-# 01 — Project Charter: PulseFake
+# 01 — Project Charter: TrueBeat
 
 ## Vision
 
@@ -43,7 +43,7 @@ FakeCatcher approach (Ciftci, Demir & Yin, 2020; productized by Intel, 2022).
 | G1 | HR MAE ≤ 5 bpm on UBFC-rPPG (still, well-lit clips) |
 | G2 | Detector AUC ≥ 0.70 on a person-disjoint FaceForensics++ split (0.50+ is the honest minimum for "it learned something") |
 | G3 | Full cross-dataset report: trained on FF++, tested on an unseen dataset + self-made deepfakes, with split protocol documented |
-| G4 | `pulsefake predict video.mp4` returns a label, confidence, and per-window votes, entirely offline |
+| G4 | `trubeat predict video.mp4` returns a label, confidence, and per-window votes, entirely offline |
 
 ## Constraints
 

@@ -1,0 +1,11 @@
+# Phase 3 — FakeCatcher scale: 32-ROI PPG maps + CNN
+method: pos
+band: [0.7, 14.0]
+rois: 32_regions     # tiled face layout (FakeCatcher)
+window_s: 10.0
+overlap: 0.5
+classifier: cnn_ppg_maps
+train_qualities: [raw, c23, c40]   # mixed-compression training (ADR-06)
+held_out: [celebdf_v2, selfmade_dfl]  # evaluated once, never trained on
+seed: 7
+# needs_cuda: true  # recommended; CPU overnight runs possible
