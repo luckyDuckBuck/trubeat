@@ -6,7 +6,7 @@ do not start the next phase until the gate is met or consciously waived.
 ## Phase 0 — Foundations (½ day)
 
 - [ ] `uv venv --python 3.11`, install the pinned stack (doc 03), commit `uv.lock`.
-- [ ] Repo skeleton: `src/pulsefake/`, `configs/`, `tests/`, `data/` (DVC init), `reports/`.
+- [ ] Repo skeleton: `src/trubeat/`, `configs/`, `tests/`, `data/` (DVC init), `reports/`.
 - [ ] Submit FF++ + Celeb-DF access forms; download UBFC-rPPG.
 - [ ] Write the manifest validator (NFR-08) and a synthetic-signal property test
       (72 bpm sine in → 72 ± resolution out) before any real video is touched.
@@ -67,7 +67,7 @@ do not start the next phase until the gate is met or consciously waived.
       per-window votes + bpm + warnings shown.
 - [ ] **M4.3 — Container.** Dockerfile (3.11-slim, headless OpenCV), one-command
       `docker run`.
-- **Gate G4:** `pulsefake predict video.mp4` works end-to-end offline.
+- **Gate G4:** `trubeat predict video.mp4` works end-to-end offline.
 
 ## Effort summary
 
@@ -82,6 +82,6 @@ do not start the next phase until the gate is met or consciously waived.
 ## Definition of done (every phase)
 
 1. Gate metric met and recorded in `reports/`.
-2. `pulsefake eval` reproduces the headline numbers in one command.
+2. `trubeat eval` reproduces the headline numbers in one command.
 3. No identity leakage (validator green).
 4. Run logged to MLflow with config hash.

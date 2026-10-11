@@ -1,4 +1,4 @@
-# PulseFake — Pre-Implementation Document Pack
+# TrueBeat — Pre-Implementation Document Pack
 
 A FakeCatcher-style deepfake detector built on remote photoplethysmography (rPPG):
 read the human pulse from ordinary video, check that facial blood-flow signals are
@@ -20,12 +20,17 @@ re-verified against the cited papers, datasets, and tools (Oct 2026).
 | 07 | [Implementation Plan](07_implementation_plan.md) | Phases mapped to the brief's build steps, with gates |
 | 08 | [Acceptance Test Plan](08_acceptance_test_plan.md) | How you prove it works, honestly |
 | 09 | [Data Access Starter](09_data_access_starter.md) | Tonight's 10-minute actions: verified form links, ToS friction, download commands |
+| 10 | [Agent Execution Plan](10_agent_execution_plan.md) | The ordered autonomous task backlog for the coding agent |
+
+Also see [`AGENTS.md`](../AGENTS.md) at the repo root — the agent's operating
+manual (read by OpenCode natively).
 
 ## Read order
 
 1. `01` for the why, `03` for the what-to-install, `07` for the build order.
 2. Keep `02`, `04`, `05`, `06`, `08` open as reference while implementing.
 3. `09` is the do-tonight checklist (dataset access forms + UBFC pull).
+4. Agents: `AGENTS.md` first, then `10` for your task list.
 
 ## One-line summary of the whole project
 

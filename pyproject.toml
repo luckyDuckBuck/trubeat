@@ -1,0 +1,31 @@
+[project]
+name = "trubeat"
+version = "0.1.0"
+description = "rPPG-based deepfake detector (FakeCatcher-style rebuild)"
+requires-python = ">=3.11,<3.13"  # mediapipe 0.10.21 ships cp312 wheels (verified)
+dependencies = [
+  "numpy<2.0",            # MediaPipe 0.10.x breaks on NumPy 2 — do not lift
+  "opencv-python==4.9.0.80",
+  "mediapipe==0.10.21",
+  "scipy>=1.11",
+  "scikit-learn>=1.3",
+  "pandas",
+  "pyyaml",
+  "matplotlib",
+  "mlflow",              # local file store, no account
+  "dvc",                 # dataset versioning
+  "fastapi",             # Phase 4
+  "uvicorn[standard]",   # Phase 4
+  "gradio",              # Phase 4 demo
+  # "torch",             # Phase 3 — install per https://pytorch.org for your platform
+]
+
+[project.scripts]
+trubeat = "trubeat.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/trubeat"]

@@ -54,7 +54,9 @@ uv pip install "numpy<2.0" opencv-python==4.9.0.80 mediapipe==0.10.21 \
 ```
 
 **Quirks captured so you don't rediscover them:**
-- `numpy` must stay **< 2.0** with `mediapipe 0.10.x` (NumPy 2 breaks its wheels).
+- `numpy` must stay **< 2.0** with `mediapipe 0.10.21` (its own metadata pins it;
+  pip resolved 1.26.4 on a clean install — verified Oct 2026). Python may be
+  **3.11 or 3.12** — 0.10.21 ships cp312 wheels.
 - Use `opencv-python-headless` inside Docker; full `opencv-python` on the dev
   machine only if you want `imshow` debugging.
 - Verify the rPPG-Toolbox repo license before vendoring any of its code; treat

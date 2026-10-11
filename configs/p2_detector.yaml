@@ -1,0 +1,9 @@
+# Phase 2 — classical detector
+method: pos
+band: [0.7, 14.0]      # keep residual noise — it helps spot fakes (FakeCatcher)
+rois: [forehead, cheek_l, cheek_r]   # 3–6 patches; expand before Phase 3
+window_s: 10.0         # 6 bpm steps; fine for detection votes
+overlap: 0.5
+classifier: logreg     # or svm_rbf
+cv_groups: split_group # GroupKFold — never random (R-04)
+seed: 7

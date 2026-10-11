@@ -1,79 +1,57 @@
-# trubeat
+# TrueBeat (`trubeat`)
 
-**trubeat** is a health and biometric monitoring platform that leverages photoplethysmography (PPG) and pulse analysis to detect health anomalies, including deepfake detection through cardiac rhythm analysis.
+A from-scratch rebuild of **FakeCatcher** (Ciftci, Demir & Yin, 2020): read the
+human pulse from ordinary video via remote photoplethysmography (rPPG), check
+that facial blood-flow signals are consistent across face regions, and flag
+videos that fail.
 
-## Overview
+> A detectable pulse is **not** proof a video is real — modern deepfakes inherit
+> the driver's pulse. TrueBeat targets *local spatiotemporal consistency* of
+> blood flow, the signal the 2025 literature says survives. See `docs/`.
 
-trubeat transforms everyday devices into health monitoring tools by analyzing pulse signals captured via camera or sensor. The platform can:
+## Docs (read first)
 
-- Monitor heart rate and heart rate variability
-- Detect atrial fibrillation and other cardiac anomalies
-- Analyze pulse patterns for health insights
-- Potential deepfake detection through cardiac rhythm verification
+The full pre-implementation pack lives in [`docs/`](docs/00_index.md):
+project charter, system requirements, tech stack, architecture, data strategy,
+risk register, implementation plan, acceptance tests, and the
+[agent execution plan](docs/10_agent_execution_plan.md).
 
-## Features
+**Agents start here:** [`AGENTS.md`](AGENTS.md) is the operating manual
+(OpenCode reads it natively), then `docs/09` is the task backlog.
 
-- **Pulse Analysis**: Extracts heart rate and rhythm from video or sensor data
-- **Health Monitoring**: Continuous tracking of cardiovascular metrics
-- **Anomaly Detection**: Identifies irregular heartbeats and potential health risks
-- **Deepfake Detection**: Verifies authenticity through cardiac pulse pattern analysis
-
-## Getting Started
-
-### Prerequisites
-
-- Python 3.8+
-- OpenCV
-- NumPy
-- SciPy
-
-### Installation
+## Quick start (Phase 0)
 
 ```bash
-git clone https://github.com/tripathiayushman/trubeat.git
-cd trubeat
-pip install -r requirements.txt
+uv venv --python 3.11 && source .venv/bin/activate   # 3.12 also fine
+uv pip install -e .
+pytest                    # smoke tests must stay green
 ```
 
-### Running
+Then follow the Phase 0 checklist in `docs/07_implementation_plan.md`:
+submit the FF++ / Celeb-DF access forms, download UBFC-rPPG.
 
-```bash
-python main.py
-```
-
-## Project Structure
+## Layout
 
 ```
-trubeat/
-├── docs/                    # Project documentation
-│   ├── 00_index.md
-│   ├── 01_project_charter.md
-│   ├── 02_system_requirements.md
-│   ├── 03_tech_stack.md
-│   ├── 04_system_architecture.md
-│   ├── 05_data_strategy.md
-│   ├── 06_risk_register.md
-│   ├── 07_implementation_plan.md
-│   └── 08_acceptance_test_plan.md
-├── src/                     # Source code
-├── data/                    # Dataset files
-├── tests/                   # Test suites
-└── README.md               # This file
+src/trubeat/   # one module per pipeline stage (interfaces: docs/04 §4)
+configs/       # p1_hr / p2_detector / p3_cnn — every run is config-driven
+data/          # DVC-tracked; raw faces NEVER committed (see .gitignore)
+docs/          # the full pre-implementation pack (00–09)
+tests/         # smoke + golden-set regression + synthetic-signal property tests
+third_party/   # reference clones only (rPPG-Toolbox) — never dependencies
 ```
 
-## Use Cases
+## Status
 
-- **Healthcare**: Remote patient monitoring without wearable devices
-- **Security**: Identity verification through biometric pulse analysis
-- **Research**: Cardiac signal processing and anomaly detection
-- **Authentication**: Deepfake detection and media forensics
+Scaffold + docs complete. Pipeline modules are typed stubs raising
+`NotImplementedError`, sequenced by `docs/09` Track A for autonomous
+implementation. Human gates (env, dataset forms/downloads, ROI glance,
+gate reviews) are collected in `reports/HUMAN_GATES.md` once Track A lands.
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+MIT — see [LICENSE](LICENSE).
 
 ## Contact
 
-Ayushman Tripathi - tripathiayushman@example.com
-
-Project Link: https://github.com/tripathiayushman/trubeat
+Ayushman Tripathi — tripathiayushman@example.com
