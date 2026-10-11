@@ -4,6 +4,7 @@ __pycache__/
 # never commit faces, videos, or caches
 data/raw/
 data/processed/
+data/models/
 runs/
 reports/
 *.mp4
@@ -12,3 +13,6 @@ reports/
 *.mov
 *.npy
 # keep: data/manifests/*.csv, configs/, docs/, src/, tests/
+
+# reference clone, not a dependency (see third_party/README.md)
+third_party/rppg-toolbox/
