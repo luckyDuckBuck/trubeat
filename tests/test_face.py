@@ -11,10 +11,10 @@ import numpy as np
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import synth  # noqa: E402
+import synth
 
-from trubeat import face as face_mod  # noqa: E402
-from trubeat.ingest import open_video  # noqa: E402
+from trubeat import face as face_mod
+from trubeat.ingest import open_video
 
 try:
     _MODEL = face_mod.resolve_model_path()

@@ -2,8 +2,8 @@
 
 import numpy as np
 import pytest
-
 import synth
+
 from trubeat.consistency import coherence_features, lag0_correlation
 
 FPS = 30.0

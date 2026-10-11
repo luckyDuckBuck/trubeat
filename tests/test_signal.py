@@ -2,11 +2,9 @@
 
 import numpy as np
 import pytest
+from synth import pulse_wave
 
 from trubeat.signal import condition, extract_ppg
-
-import synth
-from synth import pulse_wave
 
 FPS = 30.0
 

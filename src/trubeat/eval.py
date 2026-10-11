@@ -258,12 +258,16 @@ def write_report(report, config: dict, out_path: str) -> None:
             "",
             f"- Accuracy: {report.accuracy:.3f}",
             f"- AUC: {report.auc:.3f} (gate G2: ≥ 0.70)",
-            "- Precision: {:.3f} (positive class: fake)".format(report.precision),
+            f"- Precision: {report.precision:.3f} (positive class: fake)",
             f"- Recall: {report.recall:.3f}",
-            f"- Confusion: tp={c.get('tp')} tn={c.get('tn')} "
-            f"fp={c.get('fp')} fn={c.get('fn')}",
-            "- False-positive rate on real videos (standalone): "
-            f"{report.fpr_on_real:.3f}",
+            (
+                f"- Confusion: tp={c.get('tp')} tn={c.get('tn')} "
+                f"fp={c.get('fp')} fn={c.get('fn')}"
+            ),
+            (
+                "- False-positive rate on real videos (standalone): "
+                f"{report.fpr_on_real:.3f}"
+            ),
             "",
         ]
         if report.ci:

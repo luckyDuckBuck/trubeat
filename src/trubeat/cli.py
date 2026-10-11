@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -10,12 +11,9 @@ import pandas as pd
 import yaml
 
 from . import eval as evalmod
-from . import face
-from . import features
+from . import face, features, ingest, roi, signal
 from . import hr as hrmod
-from . import ingest
 from . import model as modelmod
-from . import roi, signal
 from .errors import TrueBeatError
 
 
@@ -29,7 +27,10 @@ def load_config(path):
 
 def _jsonable(d):
     """NaN → None so output is always valid JSON."""
-    return {k: (None if isinstance(v, float) and v != v else v) for k, v in d.items()}
+    return {
+        k: (None if isinstance(v, float) and math.isnan(v) else v)
+        for k, v in d.items()
+    }
 
 
 def _feat_for_video(path, config):
@@ -91,8 +92,8 @@ def cmd_train(args):
     out = args.output or "runs/trubeat_model.joblib"
     Path(out).parent.mkdir(parents=True, exist_ok=True)
     joblib.dump({"model": model, "config": config}, out)
-    print(json.dumps({"saved": out, "n_windows": int(len(X)),
-                      "n_videos": int(len(train_rows))}))
+    print(json.dumps({"saved": out, "n_windows": len(X),
+                      "n_videos": len(train_rows)}))
 
 
 def _load_bundle(path):

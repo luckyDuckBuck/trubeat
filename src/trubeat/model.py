@@ -11,6 +11,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from . import face, features, hr, ingest, roi, signal
+from .errors import NoFace
 
 
 @dataclass
@@ -87,6 +88,10 @@ def predict_video(path: str, model, config: dict) -> Prediction:
 
     stream = ingest.open_video(path)
     landmarks, valid = face.track_landmarks(stream.frames, stream.fps)
+    if not np.any(valid):
+        # No face in any frame: nothing to analyze. Surface the designed
+        # error code rather than crashing later on NaN features (AGENTS.md §5).
+        raise NoFace(f"no face tracked in any frame: {path}")
     if float(np.mean(valid)) < 0.7:
         warnings.append("W_UNSTABLE_TRACK: face tracked in <70% of frames")
     traces = roi.extract_roi_means(

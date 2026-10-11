@@ -9,6 +9,6 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install pytest ruff
-      - run: ruff check src tests || true   # advisory until code lands
+      - run: ruff check src tests   # blocking: tree stays lint-clean
       - run: pip install -e .   # core pipeline deps (headless cv2, mediapipe, …)
       - run: PYTHONPATH=src pytest tests/ -q

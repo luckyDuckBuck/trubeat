@@ -14,6 +14,33 @@ DETECT_BAND = (0.7, 14.0)
 
 _EPS = 1e-12
 
+
+def _interp_nans_col(x: np.ndarray) -> np.ndarray:
+    """Linearly interpolate NaN gaps in one ROI's signal.
+
+    NaNs come from frames where the face wasn't tracked (or the green-method
+    path, which doesn't condition). An all-NaN column — no usable signal at
+    all — becomes flat zeros, so downstream features read "no measurable
+    pulse" (0.0) instead of propagating NaN (AGENTS.md §5).
+    """
+    x = np.asarray(x, dtype=float).copy()
+    nans = np.isnan(x)
+    if not np.any(nans):
+        return x
+    if np.all(nans):
+        return np.zeros_like(x)
+    idx = np.arange(x.shape[0])
+    x[nans] = np.interp(idx[nans], idx[~nans], x[~nans])
+    return x
+
+
+def _fill_nans(ppg: np.ndarray) -> np.ndarray:
+    """Apply _interp_nans_col per ROI column of a (T, R) matrix."""
+    ppg = np.asarray(ppg, dtype=float)
+    if ppg.ndim != 2 or ppg.shape[1] == 0:
+        return ppg
+    return np.column_stack([_interp_nans_col(ppg[:, r]) for r in range(ppg.shape[1])])
+
 FEATURE_COLUMNS = [
     "win_start_s",
     "win_end_s",
@@ -66,8 +93,8 @@ def _snr(power: np.ndarray) -> float:
 
 def _window_bounds(n_samples: int, fps: float, win_s: float, overlap: float):
     """Yield (start_idx, end_idx) sample windows; empty if none fit."""
-    win_n = int(round(win_s * fps))
-    step_n = int(round(win_n * (1.0 - overlap)))
+    win_n = round(win_s * fps)
+    step_n = round(win_n * (1.0 - overlap))
     if win_n < 2 or step_n < 1 or n_samples < win_n:
         return
     yield from (
@@ -102,6 +129,7 @@ def window_features(
     ppg = np.asarray(ppg, dtype=float)
     if ppg.ndim != 2:
         raise ValueError(f"ppg must be 2-D (T, R), got shape {ppg.shape}")
+    ppg = _fill_nans(ppg)  # dropped frames can't poison the windows
     n_samples, n_roi = ppg.shape
     rows = []
     for start, end in _window_bounds(n_samples, fps, win_s, overlap):
@@ -153,8 +181,9 @@ def build_ppg_maps(ppg: np.ndarray, fps: float) -> np.ndarray:
     ppg = np.asarray(ppg, dtype=float)
     if ppg.ndim != 2:
         raise ValueError(f"ppg must be 2-D (T, R), got shape {ppg.shape}")
+    ppg = _fill_nans(ppg)
     n_samples, n_roi = ppg.shape
-    win_n = int(round(WIN_S * fps))
+    win_n = round(WIN_S * fps)
     n_freq = _band_n_bins(win_n, fps) if win_n >= 2 else 0
     bounds = list(_window_bounds(n_samples, fps, WIN_S, OVERLAP))
     if not bounds or n_roi < 1:

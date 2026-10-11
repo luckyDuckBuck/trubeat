@@ -7,10 +7,10 @@ import numpy as np
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import synth  # noqa: E402
+import synth
 
-from trubeat.errors import LowFps, ShortVideo, UnreadableVideo  # noqa: E402
-from trubeat.ingest import VideoStream, open_video  # noqa: E402
+from trubeat.errors import LowFps, ShortVideo, UnreadableVideo
+from trubeat.ingest import VideoStream, open_video
 
 
 def test_open_valid_video(tmp_path):

@@ -85,7 +85,7 @@ def track_landmarks(frames: np.ndarray, fps: float) -> tuple[np.ndarray, np.ndar
         last_ts = -1
         for i in range(t):
             # VIDEO mode demands strictly increasing timestamps.
-            ts_ms = max(int(round(i * 1000.0 / fps)), last_ts + 1)
+            ts_ms = max(round(i * 1000.0 / fps), last_ts + 1)
             last_ts = ts_ms
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frames[i])
             result = landmarker.detect_for_video(mp_image, ts_ms)
