@@ -2,13 +2,11 @@
 
 import numpy as np
 import pytest
+from synth import pulse_wave, write_pulse_video
+from test_signal import _rgb_traces
 
 from trubeat.hr import HRResult, estimate_hr
 from trubeat.signal import condition, extract_ppg
-
-import synth
-from synth import pulse_wave, write_pulse_video
-from test_signal import _rgb_traces
 
 FPS = 30.0
 

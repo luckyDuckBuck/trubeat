@@ -93,8 +93,8 @@ def _snr(power: np.ndarray) -> float:
 
 def _window_bounds(n_samples: int, fps: float, win_s: float, overlap: float):
     """Yield (start_idx, end_idx) sample windows; empty if none fit."""
-    win_n = int(round(win_s * fps))
-    step_n = int(round(win_n * (1.0 - overlap)))
+    win_n = round(win_s * fps)
+    step_n = round(win_n * (1.0 - overlap))
     if win_n < 2 or step_n < 1 or n_samples < win_n:
         return
     yield from (
@@ -183,7 +183,7 @@ def build_ppg_maps(ppg: np.ndarray, fps: float) -> np.ndarray:
         raise ValueError(f"ppg must be 2-D (T, R), got shape {ppg.shape}")
     ppg = _fill_nans(ppg)
     n_samples, n_roi = ppg.shape
-    win_n = int(round(WIN_S * fps))
+    win_n = round(WIN_S * fps)
     n_freq = _band_n_bins(win_n, fps) if win_n >= 2 else 0
     bounds = list(_window_bounds(n_samples, fps, WIN_S, OVERLAP))
     if not bounds or n_roi < 1:

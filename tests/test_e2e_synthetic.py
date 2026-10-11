@@ -8,8 +8,8 @@ The only mocked link is the face detector itself (needs real faces; human gate).
 
 import numpy as np
 import pytest
-
 import synth
+
 from trubeat import features, model, roi, signal
 
 FPS = 30.0

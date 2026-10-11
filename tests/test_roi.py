@@ -7,9 +7,9 @@ import numpy as np
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import synth  # noqa: E402
+import synth
 
-from trubeat.roi import ROI_DEFS_P1, extract_roi_means  # noqa: E402
+from trubeat.roi import ROI_DEFS_P1, extract_roi_means
 
 
 def _two_tone_frames(t=5, h=100, w=100):

@@ -1,11 +1,12 @@
 """Tests for trubeat.model: training + single-video prediction."""
 
+from unittest.mock import MagicMock, patch
+
 import numpy as np
 import pandas as pd
 import pytest
 from sklearn.metrics import roc_auc_score
 from sklearn.pipeline import Pipeline
-from unittest.mock import MagicMock, patch
 
 from trubeat.hr import HRResult
 from trubeat.model import Prediction, _to_label, predict_video, train_classifier
@@ -129,7 +130,7 @@ def test_predict_video_raises_no_face_when_never_tracked():
     """A faceless video must raise the designed E_NO_FACE, not crash in sklearn."""
     from trubeat.errors import NoFace
 
-    patches, stream, landmarks, valid, hr_res = _mock_stages(valid_frac=0.0)
+    patches, stream, landmarks, valid, _ = _mock_stages(valid_frac=0.0)
     model = MagicMock()
     with patches[0] as m_ing, patches[1] as m_face:
         m_ing.open_video.return_value = stream

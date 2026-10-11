@@ -1,9 +1,10 @@
 """Tests for trubeat.eval: manifest validation, HR/detector eval, reports."""
 
+from unittest.mock import MagicMock, patch
+
 import numpy as np
 import pandas as pd
 import pytest
-from unittest.mock import MagicMock, patch
 
 from trubeat.eval import (
     DetectionReport,
