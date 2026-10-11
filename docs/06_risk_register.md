@@ -1,0 +1,20 @@
+# 06 — Risk Register
+
+| ID | Risk | Likelihood | Impact | Mitigation | Phase |
+|----|------|-----------|--------|------------|-------|
+| R-01 | **Compression destroys the pulse signal.** Even light compression degrades rPPG heavily; the BBC's independent test found pixelated video made pulse extraction fail. | High | High | Train on **mixed compression** (FF++ raw + c23 + c40) — Intel's own finding is that compression-matched training restores accuracy. Add a quality gate: refuse or low-confidence-flag heavily compressed inputs. | 2–3 |
+| R-02 | **Motion & uneven lighting.** The FakeCatcher authors' own false alarms came from movement and lighting, not from clever fakes. | High | High | POS as primary method (illumination-robust); per-frame validity masks; record capture conditions in manifests and report metrics sliced by condition. | 1–3 |
+| R-03 | **Clips too short for the math.** 10 s → 6 bpm frequency steps; HR numbers from short clips are coarse. | High | Medium | Hard gate: reject < 10 s (`E_SHORT_VIDEO`). Prefer 30 s windows for HR reporting (2 bpm steps). Always ship a confidence value with the bpm. | 1 |
+| R-04 | **Identity leakage flatters scores.** Clips of one person look alike; a random split will lie to you. | High | High | Group-aware splits enforced by a manifest validator that fails the run on leakage (NFR-08). | 2–3 |
+| R-05 | **Skin-tone bias.** Plain rPPG performs worse on the darkest skin types; Intel claimed no gap but published no data. | Medium | High | Report subgroup metrics wherever skin-type labels exist; never claim fairness without data; treat diverse test coverage as a release gate, not a footnote. | 3 |
+| R-06 | **Pulse-inheriting deepfakes.** The 2025 Frontiers study: high-quality fakes copy the driver's pulse (≈2–3 bpm deviation, face-region correlation ~0.9). Global heart rate alone cannot catch them. | High | High | Design features around **local spatiotemporal consistency** (per-region coherence, PPG-map texture), not the global bpm — this is the paper's explicit recommendation for next-gen detectors. Stress-test with self-made DeepFaceLive fakes. | 2–3 |
+| R-07 | **False positives on real video.** The BBC test: every fake caught bar one, but several real videos flagged as fake. A detector that cries wolf is unusable. | Medium | High | Tune the operating threshold on validation and report the full ROC — never a single accuracy. False-positive rate on real videos is a headline metric, not an appendix item. Human review required for any real-world flag. | 2–4 |
+| R-08 | **Dataset access delays.** Forms, approvals, Drive rate-limits. | Medium | Medium | Submit all forms in Phase 0; UBFC first (fastest); Kaggle mirrors as fallback. Nothing in Phase 1 blocks on FF++. | 0 |
+| R-09 | **Overclaiming results.** "96% accurate" was one older test set; the same paper scored ~91% on harder data. Quoting the best number is how detectors get mis-sold. | Medium | High | Report MAE/AUC **with confidence intervals**, always with the split protocol and dataset named. Cross-dataset numbers are the real score. | 2–4 |
+| R-10 | **Scope creep into real-time.** Intel's real-time product ran on Xeon servers with 72 streams; a laptop is not that. | Medium | Medium | Real-time is explicitly out of scope until Phase 4, and even then as batch/offline service. | All |
+| R-11 | **Dependency rot.** MediaPipe/NumPy version conflicts, rPPG-Toolbox API drift. | Medium | Low | Pinned `uv.lock`, CI that re-runs the golden-set regression weekly, `numpy<2.0` pin documented in the stack doc. | 0–4 |
+| R-12 | **Misuse of the tool.** A working detector can be pointed at real people. | Low | High | Local-only default, no auto-moderation deployment, human-review policy in the charter. This is a research build, not a product. | 4 |
+
+**Top 3 to internalize before writing code:** R-04 (leakage — silently invalidates
+everything), R-06 (pulse inheritance — defines what features are worth building),
+R-01 (compression — defines what data you train on).
