@@ -18,5 +18,5 @@ reports/
 third_party/rppg-toolbox/
 
 # dvc local runtime
-dvc/cache/
-dvc/tmp/
+.dvc/cache/
+.dvc/tmp/
