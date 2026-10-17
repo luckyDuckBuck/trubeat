@@ -53,8 +53,11 @@ python faceforensics_download_v4.py ff_data --dataset Deepfakes --compression c2
       snapshot_download('thachha901/UBFC', repo_type='dataset',
                         local_dir='data/raw/ubfc_mirror',
                         allow_patterns=['UBFC/subject*'])
-  # then flatten (ground truths may already exist from the Drive pull):
-  cp -n data/raw/ubfc_mirror/UBFC/subjectN/. data/raw/ubfc_rppg/subjectN/
+  # then flatten (whole trees, per subject; no clobber of already-downloaded
+  # ground truths from the Drive pull):
+  for d in data/raw/ubfc_mirror/UBFC/subject*; do
+      cp -rn "$d" data/raw/ubfc_rppg/
+  done
   ```
 
   If the mirror disappears, re-request the originals at off-peak hours
