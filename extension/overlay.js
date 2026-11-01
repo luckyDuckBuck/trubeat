@@ -16,11 +16,11 @@
   const VERDICT_STYLE = {
     real: {
       accent: "#22c55e",
-      label: "Pulse consistent: likely real",
+      label: "No sign of AI generation found",
     },
     fake: {
       accent: "#ef4444",
-      label: "Pulse inconsistent: pixel-replacement pattern",
+      label: "Likely AI-generated or manipulated",
     },
     inconclusive: {
       accent: "#f59e0b",
@@ -29,8 +29,10 @@
   };
 
   const STANDING_CAVEAT =
-    "Detects face-swaps. Reenactment fakes (Face2Face, NeuralTextures) " +
-    "keep the original pulse and are out of scope.";
+    "Checks for AI-generated video (trained on 31 generators; it misses some " +
+    "new ones and flags a small share of real videos) and, weakly, for " +
+    "face-swaps. Blind to reenactment fakes (Face2Face, NeuralTextures). " +
+    "'No sign of AI generation' is not proof a video is real.";
 
   // Exposed for the automated tests (tests/js/extension_test.mjs).
   globalThis.__trueBeatVerdictStyles = VERDICT_STYLE;
@@ -148,6 +150,16 @@
       dot.style.background = style.accent;
       title.textContent = "TrueBeat";
       const rows = [];
+      if (r.ai_probability != null) {
+        rows.push([
+          "AI-video detector",
+          Math.round(r.ai_probability * 100) + "% (score " + num(r.ai_score, 2) +
+            ", flags at " + num(r.ai_threshold, 2) + ")",
+        ]);
+      }
+      if (r.decided_by) {
+        rows.push(["decided by", String(r.decided_by).replace("_", " ")]);
+      }
       if (r.hr_bpm != null) {
         rows.push(["heart rate", num(r.hr_bpm) + " bpm"]);
       }
@@ -158,13 +170,13 @@
         ]);
       }
       if (r.snr != null) {
-        rows.push(["SNR", num(r.snr)]);
+        rows.push(["pulse SNR", num(r.snr) + " dB"]);
       }
       if (r.face_valid_frac != null) {
         rows.push(["face visible", Math.round(r.face_valid_frac * 100) + "%"]);
       }
       if (r.score != null) {
-        rows.push(["score", num(r.score, 3)]);
+        rows.push(["face-swap score", num(r.score, 3)]);
       }
       body.innerHTML = `
         <div class="msg" style="color:${style.accent};font-weight:600">

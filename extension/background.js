@@ -137,6 +137,74 @@ async function pingBackend(base) {
 
 // --------------------------------------------------------------- capture
 
+// The AI-video detector needs at least one 2 s segment; keep a margin.
+const MIN_CAPTURE_SECONDS = 3;
+
+/**
+ * Runs *in the page* (chrome.scripting): describe the main <video> — the
+ * largest one with a known duration — so the capture can match the clip.
+ * Returns null when there is none (or the page hides it from us).
+ */
+function probeMainVideo() {
+  let best = null;
+  let bestArea = 0;
+  for (const v of document.querySelectorAll("video")) {
+    const r = v.getBoundingClientRect();
+    const area = r.width * r.height;
+    if (area > bestArea) {
+      best = v;
+      bestArea = area;
+    }
+  }
+  if (!best) return null;
+  return {
+    duration: Number(best.duration),
+    currentTime: Number(best.currentTime),
+    loop: !!best.loop,
+    paused: !!best.paused,
+  };
+}
+
+/**
+ * How many seconds to record: the configured length, cut to what is left
+ * of the clip (a short AI clip would otherwise be recorded across its loop
+ * seam, or frozen on its last frame). Returns {seconds, note} or
+ * {seconds: 0, note} when there is not enough clip left to analyse.
+ */
+function planCaptureSeconds(configured, info) {
+  const want = Math.max(MIN_CAPTURE_SECONDS, Math.round(Number(configured) || 20));
+  if (!info || !Number.isFinite(info.duration) || info.duration <= 0) {
+    return { seconds: want, note: "" }; // live stream or unknown: as configured
+  }
+  const left = info.loop ? info.duration : info.duration - (info.currentTime || 0);
+  if (left < MIN_CAPTURE_SECONDS) {
+    return {
+      seconds: 0,
+      note: "The video is almost over. Rewind it, press play and check again.",
+    };
+  }
+  if (left < want) {
+    const secs = Math.max(MIN_CAPTURE_SECONDS, Math.floor(left));
+    return { seconds: secs, note: `Short clip: recording ${secs} s (what is left of it).` };
+  }
+  return { seconds: want, note: "" };
+}
+
+// Exposed for the automated tests (tests/js/extension_test.mjs).
+globalThis.__trueBeatPlanCapture = planCaptureSeconds;
+
+async function probeVideo(tabId) {
+  try {
+    const res = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: probeMainVideo,
+    });
+    return (res && res[0] && res[0].result) || null;
+  } catch (_) {
+    return null; // e.g. a page that forbids scripting: record as configured
+  }
+}
+
 async function checkTab(tabId) {
   if (current.active) {
     await pushOverlay(tabId, {
@@ -148,13 +216,19 @@ async function checkTab(tabId) {
   }
   const settings = await getSettings();
   current = { tabId, startedAt: Date.now(), active: true };
+  const plan = planCaptureSeconds(settings.captureSeconds, await probeVideo(tabId));
+  if (plan.seconds === 0) {
+    current.active = false;
+    await pushOverlay(tabId, { state: "error", title: "Nothing left to record", message: plan.note });
+    return;
+  }
 
   // The overlay goes in first so it can show live capture progress.
   await pushOverlay(tabId, {
     state: "capturing",
     elapsed: 0,
-    total: settings.captureSeconds,
-    message: "Starting capture…",
+    total: plan.seconds,
+    message: plan.note || "Starting capture…",
   });
 
   let streamId;
@@ -179,7 +253,7 @@ async function checkTab(tabId) {
       type: "OFFSCREEN_START",
       streamId,
       tabId,
-      seconds: settings.captureSeconds,
+      seconds: plan.seconds,
       backend: settings.backend,
     });
   } catch (err) {
@@ -200,7 +274,7 @@ async function ensureOffscreen() {
       url: OFFSCREEN_PATH,
       reasons: ["USER_MEDIA"],
       justification:
-        "Record the current tab's video so it can be analysed for face-swap deepfakes.",
+        "Record the current tab's video so it can be checked for AI generation and face-swaps.",
     });
   } catch (err) {
     // "Only a single offscreen document may be created" — already there.

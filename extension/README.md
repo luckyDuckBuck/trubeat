@@ -1,7 +1,7 @@
 # TrueBeat browser extension (Phase 4b)
 
-A Chrome extension that checks the video playing in the current tab for a
-face-swap-style deepfake, using **your own TrueBeat backend**.
+A Chrome extension that checks the video playing in the current tab for AI
+generation and face-swaps, using **your own TrueBeat backend**.
 
 The extension captures and uploads. It never decides anything itself: the
 verdict, the thresholds and the evidence numbers all come from the backend
@@ -13,8 +13,10 @@ and one set of thresholds.
 ## What it does
 
 1. You click **"Check this tab"**.
-2. The extension records ~20 s of the tab's video (WebM, max width 1280) in
-   an offscreen document.
+2. The extension records up to 20 s of the tab's video (WebM, max width
+   1280) in an offscreen document. It first reads the page's main `<video>`
+   and records only what is left of the clip, so a short AI clip is not
+   recorded across its loop seam or frozen on its last frame (1.1.0).
 3. It uploads that clip to your backend (the offscreen document does the
    POST, because a Blob cannot cross a runtime message), then waits for the
    verdict there too: an analysis stream that sits idle for tens of seconds
@@ -28,14 +30,16 @@ website):
 
 | Verdict | Meaning | Colour |
 |---------|---------|--------|
-| `Pulse consistent: likely real` | the face regions agree on one pulse and the detector scores the clip on the real side | green |
-| `Pulse inconsistent: pixel-replacement pattern` | the regions disagree and the detector scores the clip on the fake side: the Deepfakes-family signature | red |
-| `Inconclusive` | the QC gates refused the clip: under 10 s, no face, the face visible in under 70% of frames, or no measurable pulse | amber |
+| `No sign of AI generation found` | the whole-frame AI-video detector ran and nothing fired (not proof the video is real) | green |
+| `Likely AI-generated or manipulated` | Content Credentials declare AI generation, the AI-video detector is over its threshold, or the strict face-swap check fired; the panel's headline says which | red |
+| `Inconclusive` | no check could decide: e.g. the clip is under 2 s, unreadable, or the AI-video model is not installed | amber |
 
 The caveat is always on screen:
 
-> Detects face-swaps. Reenactment fakes (Face2Face, NeuralTextures) keep
-> the original pulse and are out of scope.
+> Checks for AI-generated video (trained on 31 generators; it misses some
+> new ones and flags a small share of real videos) and, weakly, for
+> face-swaps. Blind to reenactment fakes (Face2Face, NeuralTextures).
+> 'No sign of AI generation' is not proof a video is real.
 
 ## Install (load unpacked)
 
@@ -71,7 +75,7 @@ The caveat is always on screen:
 | Setting | Default | Notes |
 |---------|---------|-------|
 | Backend URL | `http://127.0.0.1:7860` | any TrueBeat backend that exposes the `analyze_video` endpoint |
-| Capture length | 20 s | 12–60 s. Longer captures find the pulse better; analysis takes roughly 20 s per minute of video on a CPU |
+| Capture length | 20 s | 12–60 s, cut to what is left of the clip. The AI-video check needs 2 s; the face-swap check needs 10 s |
 
 For a **hosted** backend (e.g. an `https://*.hf.space` URL) the extension asks
 Chrome for permission to reach that origin when you save. Local addresses

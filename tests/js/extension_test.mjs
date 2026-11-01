@@ -269,7 +269,7 @@ section("1. offscreen.js — the backend client (ANALYZE against a backend)");
         check("result carries the caveat", /face-swap/i.test(result.caveat || ""));
         check(
           "headline uses the app wording",
-          /Pulse consistent|Pulse inconsistent|Likely real|Likely fake|Inconclusive/.test(
+          /No sign of AI generation|Likely AI-generated|Possible face-swap|AI-generated: declared|Inconclusive/.test(
             result.headline || ""
           ),
           String(result.headline)
@@ -322,17 +322,50 @@ section("2. overlay.js — verdict mapping and copy");
     );
     check(
       "the three states are the app's wording",
-      styles.real.label === "Pulse consistent: likely real" &&
-        styles.fake.label === "Pulse inconsistent: pixel-replacement pattern" &&
+      styles.real.label === "No sign of AI generation found" &&
+        styles.fake.label === "Likely AI-generated or manipulated" &&
         styles.inconclusive.label === "Inconclusive",
       JSON.stringify(styles)
     );
   }
   check("overlay carries the standing caveat", /Face2Face/.test(caveat || ""));
   check(
+    "caveat never claims a pass proves authenticity",
+    /not proof/.test(caveat || ""),
+    caveat
+  );
+  check(
     "caveat names the out-of-scope families",
     /Face2Face/.test(caveat || "") && /NeuralTextures/.test(caveat || "")
   );
+}
+
+// ------------------------------------------ 2b. capture length planning (E3)
+
+section("2b. background.js — capture length matches the clip");
+{
+  loadScript("background.js", { chrome: chromeStub(), fetch, console });
+  const plan = globalThis.__trueBeatPlanCapture;
+  check("background exposes the capture planner", typeof plan === "function");
+  if (plan) {
+    const eq = (got, want, name) =>
+      check(name, got.seconds === want, JSON.stringify(got));
+    eq(plan(20, null), 20, "no <video> found: record as configured");
+    eq(plan(20, { duration: NaN, currentTime: 0, loop: false }), 20,
+       "live stream (no duration): record as configured");
+    eq(plan(20, { duration: 8, currentTime: 0, loop: false }), 8,
+       "an 8 s clip records 8 s, not 20 across its end");
+    eq(plan(20, { duration: 8, currentTime: 5, loop: true }), 8,
+       "a looping 8 s clip records one loop, not the seam");
+    eq(plan(20, { duration: 60, currentTime: 50, loop: false }), 10,
+       "records only what is left of the clip");
+    eq(plan(20, { duration: 60, currentTime: 59, loop: false }), 0,
+       "nothing left to record: no capture, a message instead");
+    check("the shortened plan says why",
+          /Short clip/.test(plan(20, { duration: 8, currentTime: 0 }).note));
+    eq(plan(20, { duration: 120, currentTime: 0, loop: false }), 20,
+       "a long clip records the configured 20 s");
+  }
 }
 
 // ------------------------------------------------ 3. black-frame heuristic
