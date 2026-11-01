@@ -108,7 +108,45 @@ class HTTPRangeFile(io.RawIOBase):
 
 def open_remote_zip(path_in_repo: str, repo: str = AIGVD) -> zipfile.ZipFile:
     raw = HTTPRangeFile(f"{HF}/{repo}/resolve/main/{path_in_repo}")
-    return zipfile.ZipFile(io.BufferedReader(raw, buffer_size=4 << 20))
+    zf = zipfile.ZipFile(io.BufferedReader(raw, buffer_size=1 << 20))
+    zf._trubeat_raw = raw  # exact-range member fetches bypass the buffer
+    return zf
+
+
+def _exact_member_bytes(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> bytes:
+    """One HTTP range request for exactly one member (local header + data),
+    then local decompression. Reading through the zipfile buffer instead
+    over-fetches the buffer size per clip (4 MB for a 0.1 MB clip)."""
+    import zlib
+
+    raw: HTTPRangeFile = zf._trubeat_raw
+    slack = 30 + len(info.filename.encode()) + len(info.extra) + 1024
+    raw.seek(info.header_offset)
+    want = slack + info.compress_size
+    buf = bytearray()
+    while len(buf) < want:
+        chunk = bytearray(want - len(buf))
+        n = raw.readinto(chunk)
+        if n == 0:
+            break
+        buf += chunk[:n]
+    if buf[:4] != b"PK\x03\x04":
+        raise zipfile.BadZipFile(f"no local header at {info.header_offset}")
+    name_len = int.from_bytes(buf[26:28], "little")
+    extra_len = int.from_bytes(buf[28:30], "little")
+    start = 30 + name_len + extra_len
+    data = bytes(buf[start:start + info.compress_size])
+    if len(data) != info.compress_size:
+        raise zipfile.BadZipFile("short read")
+    if info.compress_type == zipfile.ZIP_STORED:
+        out = data
+    elif info.compress_type == zipfile.ZIP_DEFLATED:
+        out = zlib.decompressobj(-15).decompress(data)
+    else:
+        raise zipfile.BadZipFile(f"unsupported compression {info.compress_type}")
+    if zlib.crc32(out) & 0xFFFFFFFF != info.CRC:
+        raise zipfile.BadZipFile("CRC mismatch")
+    return out
 
 
 def extract_member(zf: zipfile.ZipFile, name: str, dest: Path) -> bool:
@@ -117,9 +155,13 @@ def extract_member(zf: zipfile.ZipFile, name: str, dest: Path) -> bool:
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + ".part")
     try:
-        with zf.open(name) as src, open(tmp, "wb") as dst:
-            while chunk := src.read(4 << 20):
-                dst.write(chunk)
+        info = zf.getinfo(name)
+        if hasattr(zf, "_trubeat_raw"):
+            tmp.write_bytes(_exact_member_bytes(zf, info))
+        else:  # a local zip (GenBuster)
+            with zf.open(name) as src, open(tmp, "wb") as dst:
+                while chunk := src.read(4 << 20):
+                    dst.write(chunk)
         tmp.replace(dest)
         return True
     except (OSError, zipfile.BadZipFile, KeyError) as exc:
