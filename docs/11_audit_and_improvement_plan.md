@@ -236,7 +236,7 @@ task. Each phase ends with a short report in `reports/`.
 |---|---|---|
 | A1 | Commit `scripts/audit_verdicts.py` as the regression baseline for every later phase | its output is quoted in each phase report |
 | A2 | F9: `predict_video` selects the bundle's `feature_columns`; `cli predict` accepts a G2 bundle | `trubeat predict --model src/trubeat/models/detector.joblib <clip>` prints JSON; test added |
-| A3 | F10: suppress the detector score when face-valid fraction or SNR fails | no-face test asserts `detector_score is None` |
+| A3 | F10: do not compute the detector score when the face is not tracked (zero-filled input). The score stays when only SNR fails, since that is informative and B2 replaces the SNR check | no-face test asserts `detector_score is None` |
 | A4 | F11: plot what is actually analysed (band-passed) and colour the title and labels | snapshot test on the label colours; title matches the processing |
 | A5 | F12: `testpaths = ["tests"]`; the extension harness's live mode needs explicit opt-in (`TRUBEAT_LIVE=1`) and a small clip | plain `pytest` green with or without a server running |
 | A6 | F13: `cli train` drops the position columns and saves `feature_columns` in the bundle; `predict` checks them | train → predict round-trip test |

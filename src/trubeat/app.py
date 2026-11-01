@@ -231,7 +231,12 @@ def analyze_video(
     # ---- detector (optional) -------------------------------------------
     detector_score: float | None = None
     degraded = bundle is None
-    if bundle is not None:
+    # Without a tracked face the ROI traces are interpolated/zero-filled, so
+    # any detector score would be computed on fabricated input (docs/11 F10:
+    # a faceless clip showed "+4.925"). The QC gate makes such clips
+    # inconclusive anyway; the score is simply not computed.
+    face_ok = face_valid_frac >= thr.min_face_valid_frac
+    if bundle is not None and face_ok:
         try:
             feat = features.window_features(
                 ppg, fps,
@@ -268,7 +273,9 @@ def analyze_video(
         duration_s=duration,
         n_frames=int(frames.shape[0]),
         detector_score=detector_score,
-        detector_available=detector_score is not None,
+        # The model is installed and loaded (a score may still be absent
+        # when the face was not tracked; see face_ok above).
+        detector_available=bundle is not None,
         degraded=degraded,
         roi_waveforms=_waveforms(ppg),
         waveform_names=names[: ppg.shape[1]],
@@ -658,6 +665,8 @@ def _evidence_text(a: PulseAnalysis) -> str:
     ]
     if a.detector_score is not None:
         rows.append(f"| detector score | {a.detector_score:+.3f} |")
+    elif a.detector_available:
+        rows.append("| detector score | n/a (not computed: face not tracked reliably) |")
     else:
         rows.append("| detector score | n/a (no model: degraded mode) |")
     if a.warnings:

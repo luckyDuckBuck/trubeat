@@ -272,6 +272,9 @@ def test_integration_synthetic_video_runs_the_pipeline(tmp_path):
     assert a.duration_s == pytest.approx(12.0, abs=0.5)
     assert a.face_valid_frac == 0.0
     assert a.detector_available is True  # the model exists
+    # ...but no score is computed from a faceless (zero-filled) trace
+    # (docs/11 F10: this clip type used to show a meaningless "+4.925").
+    assert a.detector_score is None
     assert len(a.roi_waveforms) == 3  # the plot data was produced anyway
     assert "W_QC" in " ".join(a.warnings)
 
@@ -296,3 +299,17 @@ def test_cli_exposes_serve():
     src = Path(cli.__file__).read_text()
     assert '"serve"' in src
     assert '"--share"' in src
+
+
+def test_evidence_table_explains_a_missing_score():
+    """The detector-score row says *why* there is no score."""
+    with_score = app_mod._evidence_text(_analysis(detector_score=-0.5))
+    assert "| detector score | -0.500 |" in with_score
+    no_face = app_mod._evidence_text(
+        _analysis(detector_score=None, detector_available=True, face_valid_frac=0.0)
+    )
+    assert "not computed: face not tracked reliably" in no_face
+    degraded = app_mod._evidence_text(
+        _analysis(detector_score=None, detector_available=False, degraded=True)
+    )
+    assert "no model: degraded mode" in degraded
