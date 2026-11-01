@@ -220,24 +220,39 @@ def safe_auc(y_ai: np.ndarray, s: np.ndarray) -> float:
     return float(roc_auc_score(y_ai, s)) if 0 < y_ai.sum() < len(y_ai) else float("nan")
 
 
+def base_family(generator: str) -> str:
+    """Base model family of a generator label, so variants of one model
+    (t2v / i2v / v2v, version bumps, the same model in two dataset
+    sections) are held out together: holding out ltx_t2v while ltx_i2v
+    stays in training would overstate generalisation to unseen generators."""
+    g = generator.lower()
+    for suffix in ("_t2v", "_i2v", "_v2v"):
+        g = g.removesuffix(suffix)
+    aliases = {"open-sora": "opensora", "wan2.1": "wan", "wanx": "wan",
+               "cogvideox1.5": "cogvideox", "ltxvideo": "ltx", "gen2": "runway",
+               "gen3": "runway", "gen4.5": "runway"}
+    return aliases.get(g, g)
+
+
 def logo_eval(pool: pd.DataFrame, cols: list[str], C: float, n_folds: int = 5) -> pd.DataFrame:
-    """Leave-one-generator-out AUC on the pool."""
+    """Leave-one-generator-family-out AUC on the pool (see base_family)."""
     reals = pool[pool.label == "real"]
     fold_of = {}
     for k, (_, te) in enumerate(GroupKFold(n_folds).split(reals, groups=reals.split_group)):
         for g in reals.iloc[te].split_group:
             fold_of[g] = k
-    pool = pool.assign(real_fold=pool.split_group.map(fold_of))
-    gens = sorted(pool[pool.label == "ai"].generator.unique())
+    pool = pool.assign(real_fold=pool.split_group.map(fold_of),
+                       family_id=pool.generator.map(base_family))
+    gens = sorted(pool[pool.label == "ai"].family_id.unique())
     out = []
     for i, gen in enumerate(gens):
         k = i % n_folds
         test_real = pool[(pool.label == "real") & (pool.real_fold == k)]
-        test_fake = pool[(pool.label == "ai") & (pool.generator == gen)]
+        test_fake = pool[(pool.label == "ai") & (pool.family_id == gen)]
         blocked = set(test_real.split_group) | set(test_fake.split_group)
         train = pool[
             ((pool.label == "real") & (pool.real_fold != k))
-            | ((pool.label == "ai") & (pool.generator != gen))
+            | ((pool.label == "ai") & (pool.family_id != gen))
         ]
         train = train[~train.split_group.isin(blocked)]
         test = pd.concat([test_real, test_fake])
@@ -475,7 +490,7 @@ def write_report(path, bundle, best, search, pool, pool_auc, thr, ext_lines, rob
         ),
         f"- external: {len(ext)} clips (GenBuster-Bench all tiers + FF++ c23 original test split)",
         "",
-        "## Model selection (macro leave-one-generator-out AUC on the pool)",
+        "## Model selection (macro leave-one-generator-family-out AUC on the pool)",
         "",
         "| feature set | C | macro LOGO AUC | worst generator AUC |",
         "|---|---|---|---|",
@@ -489,9 +504,9 @@ def write_report(path, bundle, best, search, pool, pool_auc, thr, ext_lines, rob
             f"(grouped 5-fold, in-distribution): {pool_auc:.4f}. Threshold: {thr:+.4f}."
         ),
         "",
-        "### Leave-one-generator-out, selected model (each generator unseen in training)",
+        "### Leave-one-generator-family-out, selected model (each family unseen in training)",
         "",
-        "| generator | n AI | n real | AUC |",
+        "| generator family | n AI | n real | AUC |",
         "|---|---|---|---|",
     ]
     L += [f"| {r.generator} | {r.n_fake} | {r.n_real} | {r.auc:.3f} |" for r in lg.itertuples()]
