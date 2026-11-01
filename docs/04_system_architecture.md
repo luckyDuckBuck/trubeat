@@ -208,6 +208,20 @@ trubeat/
 | `E_MODEL_MISSING` | AI-video backbone weights not in the local cache | that layer is skipped with the message; `trubeat fetch-models` downloads them (the only network step, user-initiated) |
 | `W_LOW_CONFIDENCE` | weak spectral peak / low vote margin | continue, flag in output |
 
+Warnings added with the fused verdict (docs/11). Each is shown in the app and extension
+evidence and never changes a verdict by itself:
+
+| Code | Meaning |
+|------|---------|
+| `W_PARTIAL_COVERAGE` | the AI-video layer scored only part of the clip (the shipped bundle: its first 2 s segment) |
+| `W_SHORT_CLIP` | fewer segments fit than the AI-video bundle was evaluated with |
+| `W_NO_AIGEN_MODEL` / `W_AIGEN_FAILED` | no AI-video bundle installed / that layer raised; the other layers still run |
+| `W_NO_FFMPEG` / `W_NORMALIZE_FAILED` | the clip was scored as-is instead of in the training format |
+| `W_C2PA_UNVERIFIED` | Content Credentials present but their signature state is not Valid/Trusted |
+| `W_NO_C2PA_LIB` / `W_C2PA_READ` | provenance reader missing / failed; treated as "no credentials" |
+| `W_PULSE_SKIPPED` / `W_PULSE_FAILED` / `W_FACESWAP_FAILED` | pulse or face-swap layer did not run (e.g. `E_SHORT_VIDEO` under 10 s) or raised |
+| `W_TRUNCATED` | analysis capped at the first 120 s |
+
 ## 9. Design principles
 
 1. **Config-driven, not hard-coded.** Bands, windows, ROI sets, methods all live
