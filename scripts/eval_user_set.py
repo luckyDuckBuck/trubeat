@@ -82,7 +82,7 @@ def main() -> None:
         a = analyze_video(it.path)
         recs.append({
             "clip": Path(it.path).name, "label": it.label, "verdict": a.verdict,
-            "decided_by": a.decided_by or "-", "ai_probability": a.ai_probability,
+            "decided_by": a.decided_by or "-", "ai_pct": a.ai_real_percentile,
             "duration_s": round(a.duration_s, 1), "headline": a.headline,
             "why_inconclusive": a.detail if a.verdict == "inconclusive" else "",
         })
@@ -109,11 +109,11 @@ def main() -> None:
         "",
         "## Per clip",
         "",
-        "| clip | label | verdict | decided by | P(AI) | length | why inconclusive |",
+        "| clip | label | verdict | decided by | AI score above % of real clips | length | why inconclusive |",
         "|---|---|---|---|---|---|---|",
     ]
     for r in df.itertuples():
-        p = "n/a" if r.ai_probability is None or pd.isna(r.ai_probability) else f"{r.ai_probability:.0%}"
+        p = "n/a" if r.ai_pct is None or pd.isna(r.ai_pct) else f"{r.ai_pct:.0%}"
         lines.append(f"| {r.clip} | {r.label} | {r.verdict} | {r.decided_by} | {p} | "
                      f"{r.duration_s} s | {r.why_inconclusive} |")
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
