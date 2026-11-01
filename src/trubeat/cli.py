@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
+from . import detector
 from . import eval as evalmod
 from . import face, features, ingest, roi, signal
 from . import hr as hrmod
@@ -84,14 +85,25 @@ def cmd_train(args):
         y.extend([row["label"]] * len(feat))
         groups.extend([row["split_group"]] * len(feat))
     X = pd.concat(X_parts, ignore_index=True)
-    # NOTE (known wart): training on all window_features columns, including
-    # win_start_s/win_end_s, because predict_video feeds the full frame to
-    # model.predict — train/predict must see identical columns. Revisit with a
-    # proper feature-selection step before Phase-2 real-data training.
-    model = modelmod.train_classifier(X, np.array(y), np.array(groups))
+    # Train on the detector feature set only: the positional window columns
+    # (win_start_s/win_end_s) say where a window sits, not what the pulse
+    # does. predict_video hands the model exactly its fitted columns
+    # (model.feature_names_in_), so train and predict stay in step, and the
+    # bundle has the same shape as the G2 detector (docs/11 A6).
+    cols = list(detector.DETECTOR_COLUMNS)
+    model = modelmod.train_classifier(X[cols], np.array(y), np.array(groups))
     out = args.output or "runs/trubeat_model.joblib"
     Path(out).parent.mkdir(parents=True, exist_ok=True)
-    joblib.dump({"model": model, "config": config}, out)
+    joblib.dump(
+        {
+            "model": model,
+            "config": config,
+            "feature_columns": cols,
+            "method": config.get("method", "pos"),
+            "window_s": float(config.get("window_s", 10.0)),
+        },
+        out,
+    )
     print(json.dumps({"saved": out, "n_windows": len(X),
                       "n_videos": len(train_rows)}))
 

@@ -39,3 +39,46 @@ def test_hr_cli_rejects_garbage(tmp_path, monkeypatch, capsys):
         raise AssertionError("expected SystemExit(1)")
     out = json.loads(capsys.readouterr().out)
     assert out["error"] == "E_UNREADABLE"
+
+
+def test_train_cli_bundle_matches_the_detector_contract(tmp_path, monkeypatch, capsys):
+    """docs/11 A6: `trubeat train` fits on the detector columns only (no
+    positional window columns) and saves feature_columns/method/window_s,
+    so its bundle is interchangeable with the packaged G2 detector."""
+    import joblib
+    import numpy as np
+    import pandas as pd
+
+    from trubeat import cli, detector, features
+
+    rng = np.random.default_rng(0)
+
+    def fake_feat(path, config):
+        shift = 2.0 if "fake" in path else 0.0
+        return pd.DataFrame(
+            rng.normal(shift, 1.0, (4, len(features.FEATURE_COLUMNS))),
+            columns=features.FEATURE_COLUMNS,
+        )
+
+    monkeypatch.setattr(cli, "_feat_for_video", fake_feat)
+    rows = [
+        {"path": f"{lab}_{i}.mp4", "label": lab, "split": "train", "split_group": f"g{i}"}
+        for i in range(6)
+        for lab in ("real", "fake")
+    ]
+    manifest = tmp_path / "m.csv"
+    pd.DataFrame(rows).to_csv(manifest, index=False)
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text("method: green\nwindow_s: 10.0\n")
+    out = tmp_path / "bundle.joblib"
+    monkeypatch.setattr(
+        "sys.argv",
+        ["trubeat", "train", "--manifest", str(manifest), "--config", str(cfg),
+         "--output", str(out)],
+    )
+    cli.main()
+    bundle = joblib.load(out)
+    assert bundle["feature_columns"] == list(detector.DETECTOR_COLUMNS)
+    assert list(bundle["model"].feature_names_in_) == list(detector.DETECTOR_COLUMNS)
+    assert "win_start_s" not in bundle["feature_columns"]
+    assert bundle["method"] == "green" and bundle["window_s"] == 10.0
