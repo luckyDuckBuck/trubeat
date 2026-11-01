@@ -537,8 +537,21 @@ def analyze(
     score = float(np.mean(scores))
     ref = bundle.get("real_reference_scores")
     pct = float(np.mean(np.asarray(ref) < score)) if ref is not None and len(ref) else None
-    if meta.get("n_segments", 0) < 2:
-        warnings.append("W_SHORT_CLIP: one 2 s segment analysed; lower confidence")
+    n_seg, dur = int(meta.get("n_segments", 0)), float(meta.get("duration_s", 0.0))
+    seg_s = (int(cfg["n_frames"]) - 1) / float(cfg["sample_fps"])
+    if n_seg < int(cfg["max_segments"]):
+        warnings.append(
+            f"W_SHORT_CLIP: {n_seg} of the {cfg['max_segments']} segments the model was "
+            "evaluated with fit in this clip; lower confidence"
+        )
+    if dur > n_seg * seg_s + 1.0:
+        # The bundle is scored the way it was evaluated (train_segments); a
+        # long clip is therefore judged on part of its length only.
+        where = "the first" if n_seg == 1 else f"{n_seg} evenly spaced"
+        warnings.append(
+            f"W_PARTIAL_COVERAGE: scored on {where} {seg_s:.0f} s segment"
+            f"{'' if n_seg == 1 else 's'} of a {dur:.1f} s clip"
+        )
     return AIGenResult(
         real_percentile=pct,
         score=score,

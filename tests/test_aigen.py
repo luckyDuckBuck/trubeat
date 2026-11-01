@@ -190,6 +190,20 @@ def test_analyze_returns_a_scored_result(tmp_path):
         assert res.real_percentile >= 0.9
     else:
         assert res.real_percentile <= 0.96
+    # coverage is stated, not mislabelled as a short clip (round-2 audit)
+    assert not any(w.startswith("W_SHORT_CLIP") for w in res.warnings)
+    assert any(w.startswith("W_PARTIAL_COVERAGE: scored on the first 2 s segment of a 5.0 s")
+               for w in res.warnings), res.warnings
+
+
+def test_analyze_states_short_clip_against_the_bundles_segment_count(tmp_path):
+    p = synth.write_pulse_video(tmp_path / "v.mp4", fps=30.0, duration_s=2.5)
+    bundle = _tiny_bundle()
+    bundle["config"]["max_segments"] = 3
+    res = aigen.analyze(p, bundle, embedder=_StubEmbedder())
+    assert res.n_segments == 1
+    assert any(w.startswith("W_SHORT_CLIP: 1 of the 3 segments") for w in res.warnings)
+    assert not any(w.startswith("W_PARTIAL_COVERAGE") for w in res.warnings)
 
 
 def test_analyze_short_clip_is_unknown_not_a_crash(tmp_path):
