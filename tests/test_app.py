@@ -313,3 +313,41 @@ def test_evidence_table_explains_a_missing_score():
         _analysis(detector_score=None, detector_available=False, degraded=True)
     )
     assert "no model: degraded mode" in degraded
+
+
+def test_waveforms_are_band_passed_not_raw():
+    """docs/11 F11: the plot showed the raw green channel (DC ~200, drift)
+    under a 'conditioned' title. With fps given, the plotted waveform is the
+    band-passed signal: no DC offset, drift removed, the pulse kept."""
+    import numpy as np
+
+    fps, n = 25.0, 500
+    t = np.arange(n) / fps
+    pulse = np.sin(2 * np.pi * 1.2 * t)  # 72 bpm
+    raw = 200.0 + 0.05 * np.arange(n) + pulse  # DC + slow drift + pulse
+    ppg = np.column_stack([raw, raw, raw])
+    (w, *_rest) = app_mod._waveforms(ppg, fps, band=(0.7, 3.0))
+    w = np.asarray(w)
+    assert abs(w.mean()) < 0.05  # DC and drift gone
+    core = slice(50, -50)  # ignore filter edge effects
+    assert np.corrcoef(w[core], pulse[core])[0, 1] > 0.95  # the pulse survives
+
+
+def test_plot_title_names_the_applied_band_and_is_legible():
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from matplotlib.colors import to_hex
+
+    a = _analysis(
+        roi_waveforms=[[0.0, 1.0, 0.0]] * 3,
+        waveform_names=["forehead", "cheek_l", "cheek_r"],
+        waveform_band_hz=[0.7, 3.0],
+    )
+    fig = app_mod._plot(a)
+    ax = fig.axes[0]
+    assert "band-passed 0.7-3 Hz" in ax.get_title()
+    bg = to_hex(ax.get_facecolor())
+    for text in (ax.title, ax.xaxis.label, ax.yaxis.label):
+        assert to_hex(text.get_color()) != bg
+        assert to_hex(text.get_color()).lower() == "#f4f0e8"

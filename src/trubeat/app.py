@@ -108,6 +108,9 @@ class PulseAnalysis:
     warnings: list[str] = field(default_factory=list)
     roi_waveforms: list[list[float]] = field(default_factory=list)  # 3 x T
     waveform_names: list[str] = field(default_factory=list)
+    # The band the plotted waveforms were filtered to (Hz); the plot title
+    # reads it, so the title cannot claim a filter that was not applied.
+    waveform_band_hz: list[float] = field(default_factory=lambda: [0.7, 3.0])
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), default=float)
@@ -220,9 +223,10 @@ def analyze_video(
     names = _roi_names(config)
 
     # ---- QC + per-region heart rate ------------------------------------
+    hr_band = tuple(config.get("band", (0.7, 3.0)))
     per_roi_hr: list[float] = []
     for r in range(ppg.shape[1]):
-        res = hr.estimate_hr(ppg[:, r], fps, band=tuple(config.get("band", (0.7, 3.0))))
+        res = hr.estimate_hr(ppg[:, r], fps, band=hr_band)
         per_roi_hr.append(float(res.bpm) if np.isfinite(res.bpm) else float("nan"))
     finite = [b for b in per_roi_hr if np.isfinite(b)]
     agreement = float(np.std(finite)) if len(finite) > 1 else None
@@ -277,8 +281,9 @@ def analyze_video(
         # when the face was not tracked; see face_ok above).
         detector_available=bundle is not None,
         degraded=degraded,
-        roi_waveforms=_waveforms(ppg),
+        roi_waveforms=_waveforms(ppg, fps, band=hr_band),
         waveform_names=names[: ppg.shape[1]],
+        waveform_band_hz=[float(hr_band[0]), float(hr_band[1])],
     )
     if duration > max_seconds:
         analysis.warnings.append(
@@ -303,11 +308,28 @@ def _mean_snr(ppg: np.ndarray, fps: float) -> float:
     return float(np.mean(snrs)) if snrs else 0.0
 
 
-def _waveforms(ppg: np.ndarray, max_points: int = 1500) -> list[list[float]]:
-    """Down-sampled ROI waveforms for plotting (NaNs replaced by 0)."""
+def _waveforms(
+    ppg: np.ndarray,
+    fps: float | None = None,
+    band: tuple[float, float] = (0.7, 3.0),
+    max_points: int = 1500,
+) -> list[list[float]]:
+    """Down-sampled ROI waveforms for plotting (NaNs replaced by 0).
+
+    With ``fps`` given, each ROI signal is detrended and band-passed to
+    ``band`` first (``signal.condition``), i.e. the signal the heart-rate
+    step analyses. The raw green channel sits at 100-250 intensity units
+    with slow drift and shows no pulse by eye (docs/11 F11).
+    """
     out = []
     for r in range(ppg.shape[1]):
-        col = np.nan_to_num(ppg[:, r], nan=0.0, posinf=0.0, neginf=0.0)
+        col = np.asarray(ppg[:, r], dtype=float)
+        if fps is not None:
+            try:
+                col = signal.condition(col, fps, band=band)
+            except ValueError:
+                pass  # band not representable at this fps: plot unfiltered
+        col = np.nan_to_num(col, nan=0.0, posinf=0.0, neginf=0.0)
         if col.size > max_points:
             idx = np.linspace(0, col.size - 1, max_points).astype(int)
             col = col[idx]
@@ -690,10 +712,14 @@ def _plot(a: PulseAnalysis):
     line_colors = ("#FF4D00", "#F4F0E8", "#A89F8F")
     for i, (name, wave) in enumerate(zip(a.waveform_names, a.roi_waveforms)):
         ax.plot(wave, linewidth=0.7, label=name, color=line_colors[i % 3])
-    ax.set_xlabel("frame")
-    ax.set_ylabel("pulse")
-    ax.set_title("Per-region pulse waveforms (conditioned, 0.7-3 Hz band)")
-    ax.tick_params(colors="#F4F0E8", labelcolor="#F4F0E8")
+    lo, hi = (a.waveform_band_hz + [0.7, 3.0])[:2]
+    ink = "#F4F0E8"  # paper text on the black panel
+    ax.set_xlabel("frame", color=ink)
+    ax.set_ylabel("band-passed signal", color=ink)
+    ax.set_title(
+        f"Per-region pulse waveforms (band-passed {lo:g}-{hi:g} Hz)", color=ink
+    )
+    ax.tick_params(colors=ink, labelcolor=ink)
     for spine in ax.spines.values():
         spine.set_color("#A89F8F")
     legend = ax.legend(loc="upper right", fontsize=8, frameon=False)
