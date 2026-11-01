@@ -21,6 +21,7 @@ re-verified against the cited papers, datasets, and tools (Oct 2026).
 | 08 | [Acceptance Test Plan](08_acceptance_test_plan.md) | How you prove it works, honestly |
 | 09 | [Data Access Starter](09_data_access_starter.md) | Tonight's 10-minute actions: verified form links, ToS friction, download commands |
 | 10 | [Agent Execution Plan](10_agent_execution_plan.md) | The ordered autonomous task backlog for the coding agent |
+| 11 | [Audit and Improvement Plan](11_audit_and_improvement_plan.md) | Why verdicts come back Inconclusive, what's broken, and the plan to add AI-generated-video detection (PROPOSED, needs human approval) |
 
 Also see [`AGENTS.md`](../AGENTS.md) at the repo root — the agent's operating
 manual (read by OpenCode natively).
