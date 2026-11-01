@@ -41,44 +41,45 @@ submit the FF++ / Celeb-DF access forms, download UBFC-rPPG.
 
 ## Run the app (Phase 4a)
 
-A one-click web interface over the *same* pipeline the CLI runs
-(ingest → face → ROI → signal → features → predict).
+A one-click web interface over the *same* pipeline the CLI runs.
 
 ```bash
-uv pip install -e ".[serving]"      # pulls gradio (optional extra)
+uv pip install -e ".[serving]"      # gradio (optional extra)
+# AI-video detector (CPU only; install torch from the CPU index first,
+# or pip pulls ~3 GB of CUDA wheels):
+uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+uv pip install -e ".[aigen]"
+trubeat fetch-models                # one-time weight download: the ONLY network step
 trubeat serve                       # http://127.0.0.1:7860
-trubeat serve --port 8080           # different port
-trubeat serve --share               # temporary public link (see the warning below)
 ```
 
-Upload a video of a face (**10–120 s works best**; analysis is capped at the
-first 120 s and the app says so when it truncates). Expect roughly **20
-seconds of processing per minute of video** on a CPU — a 60 s clip takes about
-a minute.
+Upload a video (**2–120 s**). Each clip goes through three independent
+checks, and the verdict says which one decided (docs/11 §4):
 
-You get a three-state verdict with its evidence (per-region heart rate,
-inter-region agreement, `face_valid_frac`, SNR, and a plot of the three ROI
-waveforms):
+| check | what it looks at | needs |
+|-------|------------------|-------|
+| **Content Credentials** | a C2PA manifest declaring AI generation (offline read; re-encoding usually strips it) | — |
+| **AI-video detector** | the whole frame over time: frozen DINOv2 features, how the clip moves through them (`src/trubeat/aigen.py`) | ≥ 2 s |
+| **face-swap check** | rPPG consistency across face regions, at a strict threshold (weak: about a quarter of Deepfakes-style swaps, ~2% of real face videos flagged) | ≥ 10 s, visible face |
 
 | verdict | meaning |
 |---------|---------|
-| **Pulse consistent — likely real** | the face regions agree on one pulse and the detector scores the clip on the real side |
-| **Pulse inconsistent — pixel-replacement pattern detected** | the regions disagree and the detector scores the clip on the fake side — the Deepfakes-family signature |
-| **Inconclusive** | the QC gates refused the clip (< 10 s, no face, unstable tracking, no measurable pulse), or no detector model is installed |
+| **Likely AI-generated** / **AI-generated: declared by its Content Credentials** / **Possible face-swap** | a check fired; the detail says which, with its score and threshold |
+| **No sign of AI generation found** | the AI-video detector ran and nothing fired. *Not* proof the video is real |
+| **Inconclusive** | no check could decide; the detail lists why for each one |
 
-**The caveat is always shown, because it is the honest result:**
+Measured accuracy, including false alarms on real videos, is in
+`reports/aigen_detector.md` (written by `scripts/train_aigen.py`) and
+summarised in docs/11. **Score it on your own videos:** put clips you know
+the answer for in `data/raw/user_eval/ai/` and `data/raw/user_eval/real/`,
+then run `python scripts/eval_user_set.py`.
 
-> Detects face-swap-style fakes (research AUC 0.73 on the Deepfakes family).
-> Cannot detect reenactment fakes (Face2Face, NeuralTextures) — those keep the
-> original pulse. Details: `reports/g2_detector.md`.
+From the command line: `trubeat aigen clip.mp4` (provenance + AI-video
+detector, JSON).
 
-**Degraded mode.** The G2 detector bundle is committed inside the package
-(`src/trubeat/models/detector.joblib`) and ships in the wheel, so the app
-finds it from any working directory. A locally retrained bundle can override
-it by being placed at `models/detector.joblib` or `data/models/detector.joblib`
-in the repo root. With no bundle found at all, the app still works as a
-**pulse / heart-rate analyzer** (it reports the per-region heart rate, the
-agreement and the QC) and says that no real/fake decision can be made.
+The pulse itself no longer decides anything. With the standard pulse SNR,
+real faces in web-quality video read like noise (docs/11, Phase B result),
+so heart rate and pulse SNR are shown as evidence only.
 
 **Privacy.** The local app is **fully private** — videos are analysed on this
 machine and never leave it. `--share` publishes a temporary Gradio link:
