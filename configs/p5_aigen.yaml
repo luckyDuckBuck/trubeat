@@ -25,3 +25,23 @@ seed: 7
 # Cache (embeddings are the expensive step; keyed by video bytes + backbone
 # + sampling parameters).
 cache_dir: data/processed/aigen_emb
+
+# Training-time compression normalisation (docs/11 D5). The public sets
+# differ by an order of magnitude in bitrate between real and generated
+# clips, a shortcut that would flag every compressed web video as AI. Every
+# training clip, real and generated, is re-encoded the same way to roughly
+# web quality first. Inference takes the user's clip as-is (already
+# web-compressed). Robustness is measured separately at a harsher setting.
+normalize:
+  short_side: 360
+  crf: 28
+  preset: veryfast
+  out_dir: data/processed/aigen_norm
+robustness_normalize:   # harsher re-encode for the robustness check
+  short_side: 240
+  crf: 35
+  preset: veryfast
+  out_dir: data/processed/aigen_norm_harsh
+train_segments: 2       # segments per clip for training (inference uses max_segments)
+workers: 3              # parallel embed workers (each torch_threads/2 threads)
+target_fpr: 0.05        # operating point: at most 5% of real clips flagged

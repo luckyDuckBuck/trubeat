@@ -146,6 +146,9 @@ def sample_segments(path, config=None) -> tuple[np.ndarray, dict]  # (S, N, H, W
 class Embedder: def embed(frames: np.ndarray) -> np.ndarray      # (N, D) unit-norm
 def trajectory_features(emb: np.ndarray) -> dict                  # GEOMETRY_COLUMNS
 def analyze(path, bundle, embedder=None) -> AIGenResult           # p_ai, score, label, warnings
+
+# provenance.py (added 2026-11-01, docs/11 D2; additive, offline C2PA read)
+def read_provenance(path) -> ProvenanceResult  # has_c2pa, ai_declared, source_types, generator
 ```
 
 ## 5. Key design numbers
