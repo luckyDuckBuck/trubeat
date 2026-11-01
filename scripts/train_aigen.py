@@ -22,7 +22,11 @@ Protocol
      1 - target_fpr. Never tuned on external data.
   5. External evaluation once: AUC per tier/generator vs held-out reals,
      recall at the threshold, FPR on GenBuster reals and on FF++ real test
-     clips, bootstrap CIs; plus a harsher re-encode for robustness.
+     clips, bootstrap CIs; plus a harsher re-encode, a tab-capture-like
+     VP9 WebM and the unre-encoded file, for robustness.
+
+    python scripts/train_aigen.py --robustness-only   # robustness rows only,
+                                                      # from saved features
 
 Usage:
     python scripts/train_aigen.py --config configs/p5_aigen.yaml
@@ -67,8 +71,10 @@ def cfg_hash(cfg: dict) -> str:
 # ------------------------------------------------------------------ data ---
 
 
-def load_rows(aigen_manifest: Path, ffpp_manifest: Path) -> pd.DataFrame:
-    a = pd.read_csv(aigen_manifest)
+def load_rows(aigen_manifest: Path, ffpp_manifest: Path,
+              extra_manifests: tuple[Path, ...] = ()) -> pd.DataFrame:
+    a = pd.concat([pd.read_csv(m) for m in (aigen_manifest, *extra_manifests)],
+                  ignore_index=True)
     a["role"] = np.where(a["source"].str.startswith("genbuster"), "external", "pool")
     rows = [a]
     if ffpp_manifest.is_file():
@@ -234,7 +240,11 @@ def base_family(generator: str) -> str:
                "cogvideox1.5": "cogvideox", "ltxvideo": "ltx", "gen2": "runway",
                "gen3": "runway", "gen4.5": "runway",
                # built on another base model: held out with it
-               "causvid": "wan", "accvideo": "hunyuanvideo", "repvideo": "cogvideox"}
+               "causvid": "wan", "accvideo": "hunyuanvideo", "repvideo": "cogvideox",
+               # Rapidata names (scripts/download_rapidata.py)
+               "gen3-alpha": "runway", "ray2": "luma", "pika2.2": "pika", "veo2": "veo",
+               "veo3": "veo", "veo3.1": "veo", "hunyuan": "hunyuanvideo", "mochi-1": "mochi",
+               "seedance-1-pro": "seedance", "kling-v2.1-master": "kling"}
     return aliases.get(g, g)
 
 
@@ -314,14 +324,28 @@ def main() -> None:
     ap.add_argument("--external-per-group", type=int, default=150,
                     help="cap per (source, generator, label) in the external set")
     ap.add_argument("--variant-limit", type=int, default=40,
-                    help="per-group cap for the robustness / as-is subset")
+                    help="per-(source, generator) cap on AI clips in the robustness subset")
+    ap.add_argument("--variant-real-limit", type=int, default=200,
+                    help="per-source cap on real clips in the robustness subset")
+    ap.add_argument("--robustness-only", action="store_true",
+                    help="skip training: re-run the robustness rows from --features and "
+                         "--model-out into --robustness-report")
+    ap.add_argument("--features", default=str(REPO / "runs/aigen_features.pkl"),
+                    help="features table: written by training, read by --robustness-only")
+    ap.add_argument("--extra-manifest", nargs="*", default=[],
+                    help="more pool manifests (e.g. data/manifests/aigen_rapidata.csv)")
+    ap.add_argument("--robustness-report", default=str(REPO / "reports/aigen_robustness.md"))
     args = ap.parse_args()
     warnings.filterwarnings("ignore")
     cfg = aigen.merged_config(yaml.safe_load(Path(args.config).read_text()))
     cfg["cache_dir"] = str(REPO / cfg["cache_dir"])
     workers = int(cfg.get("workers", 2))
+    if args.robustness_only:
+        robustness_only(args, cfg, workers)
+        return
 
-    rows = load_rows(Path(args.manifest), Path(args.ffpp_manifest))
+    rows = load_rows(Path(args.manifest), Path(args.ffpp_manifest),
+                     tuple(Path(m) for m in args.extra_manifest))
     pool_rows = rows[rows.role == "pool"]
     pool_ai = pool_rows[pool_rows.label == "ai"]
     pool_real = pool_rows[pool_rows.label == "real"]
@@ -350,7 +374,7 @@ def main() -> None:
     if len(errs):
         log(f"feature failures: {errs.error.value_counts().to_dict()}")
     data = rows.merge(feats[feats.error == ""], on="feat_path")
-    data.to_pickle(REPO / "runs/aigen_features.pkl")
+    data.to_pickle(args.features)
     pool = data[data.role == "pool"].reset_index(drop=True)
     ext = data[data.role == "external"].reset_index(drop=True)
     log(f"pool {len(pool)} ({(pool.label == 'ai').sum()} ai), external {len(ext)}")
@@ -389,8 +413,8 @@ def main() -> None:
         "real_reference_scores": np.sort(oof[y_pool == 0]).astype(np.float32),
         "config": bundle_cfg,
         "config_hash": cfg_hash(cfg),
-        "trained_on": (f"AIGVDBench subset ({int((pool.source == 'aigvdbench').sum())} clips) + "
-                       f"FF++ c23 originals train/val ({int((pool.source == 'ffpp_original').sum())} reals)"),
+        "trained_on": " + ".join(
+            f"{src} ({n} clips)" for src, n in pool.source.value_counts().sort_index().items()),
         "selection": "macro leave-one-generator-out AUC on the pool",
         "created": time.strftime("%Y-%m-%d %H:%M"),
     }
@@ -402,30 +426,103 @@ def main() -> None:
     ext = ext.assign(score=ext_s, flagged=ext_s >= thr)
     lines = external_tables(ext)
 
-    variants = []
-    sub = cap_rows(ext, int(args.variant_limit), seed=7)
-    for name, norm_cfg in (("harsh re-encode (240p, CRF 35)", cfg["robustness_normalize"]),
-                           ("tab-capture-like (VP9 WebM, 720p, 2.5 Mb/s)", cfg["tabcapture_normalize"]),
-                           ("as-is (no re-encode)", None)):
-        if args.skip_robustness:
-            break
-        log(f"variant: {name} on {len(sub)} external clips")
-        if norm_cfg is None:
-            vx = sub.assign(feat_path=sub.path)
-        else:
-            m = normalize_all(sub.path.tolist(), norm_cfg, workers=4)
-            vx = sub.assign(feat_path=sub.path.map(m)).dropna(subset=["feat_path"])
-        vf = featurize_all(vx.feat_path.tolist(), cfg, workers)
-        keep = ["path", "label", "generator", "source", "family", "split_group", "role", "feat_path"]
-        vx = vx[keep].merge(vf[vf.error == ""], on="feat_path")
-        vs = ai_score(final, vx[cols].to_numpy())
-        variants.append((name, compact_eval(vx.assign(score=vs, flagged=vs >= thr))))
-    # the same subset under the training normalisation, for a like-for-like row
-    base = ext[ext.path.isin(set(sub.path))]
-    variants.insert(0, ("training normalisation (360p, CRF 28)", compact_eval(base)))
+    variants = [] if args.skip_robustness else run_variants(
+        ext, variant_subset(ext, args.variant_limit, args.variant_real_limit),
+        cfg, bundle, workers)
 
     write_report(args.report, bundle, best, search, pool, pool_auc, thr, lines, variants, ext)
     log(f"model -> {args.model_out}\nreport -> {args.report}")
+
+
+# (row name, config key of the first transform or None, then the app's own
+# normalisation?). The app always re-encodes its input to the training format
+# (aigen.normalize_for_inference), so a variant measures the app path only
+# when that second stage is applied; "as-is" is the app without ffmpeg.
+# The two resolution rows are counterfactuals for the round-2 audit's
+# metadata finding (pool AI clips ~480p, pool reals ~1080p): if the detector
+# had learnt "soft = AI", shrinking real clips would raise false alarms and
+# enlarging AI clips would hide them.
+VARIANTS = (("harsh re-encode (240p, CRF 35) + app normalisation", "robustness_normalize", True),
+            ("tab-capture-like (VP9 WebM, 720p, 2.5 Mb/s) + app normalisation",
+             "tabcapture_normalize", True),
+            ("real-world downscale to 480p + app normalisation", "downscale_480", True),
+            ("upscale to 1080p + app normalisation", "upscale_1080", True),
+            ("as-is (no re-encode: the app without ffmpeg)", None, False))
+
+
+def variant_subset(ext: pd.DataFrame, limit: int, real_limit: int) -> pd.DataFrame:
+    """External clips for the robustness rows: at most `limit` AI clips per
+    (source, generator) and `real_limit` real clips per source. Reals get
+    their own, larger cap: the false-positive rate is what the extension's
+    tab capture most needs measured, and 20 reals bound it only to <16%."""
+    fakes = cap_rows(ext[ext.label == "ai"], int(limit), seed=7)
+    reals = cap_rows(ext[ext.label == "real"], int(real_limit), seed=7)
+    return pd.concat([fakes, reals], ignore_index=True)
+
+
+def run_variants(ext: pd.DataFrame, sub: pd.DataFrame, cfg: dict, bundle: dict,
+                 workers: int) -> list[tuple[str, dict]]:
+    """Score `sub` under each input variant with the bundle's fixed threshold.
+    `ext` must carry `score`/`flagged` under the training normalisation; the
+    first row is that same subset, for a like-for-like comparison."""
+    final, cols, thr = bundle["model"], bundle["feature_columns"], float(bundle["threshold"])
+    out = [("training normalisation (360p, CRF 28)",
+            compact_eval(ext[ext.path.isin(set(sub.path))]))]
+    keep = ["path", "label", "generator", "source", "family", "split_group", "role", "feat_path"]
+    for name, key, then_app in VARIANTS:
+        log(f"variant: {name} on {len(sub)} external clips")
+        if key is None:
+            vx = sub.assign(feat_path=sub.path)
+        else:
+            m = normalize_all(sub.path.tolist(), cfg[key], workers=4)
+            if then_app:
+                m2 = normalize_all(list(m.values()), cfg["normalize"], workers=4)
+                m = {k: m2.get(v) for k, v in m.items()}
+            vx = sub.assign(feat_path=sub.path.map(m)).dropna(subset=["feat_path"])
+        vf = featurize_all(vx.feat_path.tolist(), cfg, workers)
+        vx = vx[keep].merge(vf[vf.error == ""], on="feat_path")
+        vs = ai_score(final, vx[cols].to_numpy())
+        out.append((name, compact_eval(vx.assign(score=vs, flagged=vs >= thr))))
+    return out
+
+
+def robustness_only(args, cfg: dict, workers: int) -> None:
+    """Re-run only the robustness rows from saved features and the saved
+    bundle (no retraining), into their own report."""
+    data = pd.read_pickle(args.features)
+    bundle = joblib.load(args.model_out)
+    cols, thr = bundle["feature_columns"], float(bundle["threshold"])
+    ext = data[data.role == "external"].reset_index(drop=True)
+    s = ai_score(bundle["model"], ext[cols].to_numpy())
+    ext = ext.assign(score=s, flagged=s >= thr)
+    sub = variant_subset(ext, args.variant_limit, args.variant_real_limit)
+    robust = run_variants(ext, sub, cfg, bundle, workers)
+    sizes = sub.groupby(["source", "label"]).size()
+    L = [f"# AI-video detector: input robustness — {time.strftime('%Y-%m-%d %H:%M')}", "",
+         (f"Bundle `{args.model_out}` (created {bundle.get('created')}, config "
+          f"`{bundle.get('config_hash')}`), threshold {thr:+.4f} fixed. External clips only "
+          "(never used for training, selection or the threshold)."), "",
+         "Subset: " + ", ".join(f"{s} {lab} {n}" for (s, lab), n in sizes.items()) + ".", "",
+         *robustness_table(robust),
+         "",
+         ("AUC per tier is against the GenBuster reals in the subset; recall and FPR are at "
+          "the fixed threshold. `n_*` columns are clip counts.")]
+    Path(args.robustness_report).write_text("\n".join(L) + "\n")
+    log(f"robustness report -> {args.robustness_report}")
+
+
+def robustness_table(robust: list[tuple[str, dict]]) -> list[str]:
+    keys = sorted({k for _, d in robust for k in d})
+
+    def fmt(v):
+        return str(v) if isinstance(v, int) else f"{v:.3f}"
+
+    # one column per input variant, one row per measure (reads better than
+    # 17 measure columns)
+    return (["| measure | " + " | ".join(name for name, _ in robust) + " |",
+             "|---" * (len(robust) + 1) + "|"]
+            + [f"| {k} | " + " | ".join(fmt(d.get(k, float("nan"))) for _, d in robust) + " |"
+               for k in keys])
 
 
 def cap_rows(df: pd.DataFrame, per_group: int, seed: int = 7,
@@ -445,7 +542,10 @@ def compact_eval(df: pd.DataFrame) -> dict:
     gb_real = df[(df.label == "real") & df.source.str.startswith("genbuster")]
     ff_real = df[df.source == "ffpp_original"]
     out = {"fpr_genbuster_real": float(gb_real.flagged.mean()) if len(gb_real) else float("nan"),
-           "fpr_ffpp_real": float(ff_real.flagged.mean()) if len(ff_real) else float("nan")}
+           "fpr_ffpp_real": float(ff_real.flagged.mean()) if len(ff_real) else float("nan"),
+           "n_genbuster_real": len(gb_real), "n_ffpp_real": len(ff_real),
+           "median_score_real": float(df[df.label == "real"].score.median()),
+           "median_score_ai": float(df[df.label == "ai"].score.median())}
     for tier in ("genbuster_id", "genbuster_ood", "genbuster_wild"):
         fakes = df[(df.source == tier) & (df.label == "ai")]
         if fakes.empty or gb_real.empty:
@@ -454,6 +554,7 @@ def compact_eval(df: pd.DataFrame) -> dict:
         y = (both.label == "ai").to_numpy().astype(int)
         out[f"auc_{tier.split('_')[1]}"] = safe_auc(y, both.score.to_numpy())
         out[f"recall_{tier.split('_')[1]}"] = float(fakes.flagged.mean())
+        out[f"n_ai_{tier.split('_')[1]}"] = len(fakes)
     return out
 
 
@@ -537,11 +638,8 @@ def write_report(path, bundle, best, search, pool, pool_auc, thr, ext_lines, rob
           "| metric | value | 95% CI (Wilson) |", "|---|---|---|"]
     L += ext_lines
     if len(robust) > 1:
-        keys = sorted({k for _, d in robust for k in d})
         L += ["", "## Robustness and input handling (same external subset, threshold fixed)", "",
-              "| input | " + " | ".join(keys) + " |", "|---" * (len(keys) + 1) + "|"]
-        L += [f"| {name} | " + " | ".join(f"{d.get(k, float('nan')):.3f}" for k in keys) + " |"
-              for name, d in robust]
+              *robustness_table(robust)]
     L += ["", "## Limits", "",
           ("- Real clips come from OpenVid-HD (AIGVDBench, GenBuster) and FF++ YouTube; other "
            "real content (phone video, screen recordings, animation) is not covered."),
