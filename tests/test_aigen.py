@@ -194,3 +194,20 @@ def test_embedder_unit_norm_embeddings(monkeypatch):
     )
     assert emb.shape == (3, 384)
     assert np.allclose(np.linalg.norm(emb, axis=1), 1.0, atol=1e-4)
+
+
+def test_missing_weights_raise_model_missing_not_a_download(monkeypatch):
+    """The analysis path never downloads (AGENTS.md §7): with no cached
+    weights it raises E_MODEL_MISSING naming the one command that fetches."""
+    from trubeat.errors import ModelMissing
+
+    monkeypatch.setattr(aigen, "cached_weights", lambda backbone: None)
+    with pytest.raises(ModelMissing) as exc:
+        aigen.Embedder()._load()
+    assert exc.value.code == "E_MODEL_MISSING"
+    assert "trubeat fetch-models" in str(exc.value)
+
+
+def test_find_bundle_returns_none_when_absent(tmp_path, monkeypatch):
+    monkeypatch.setattr(aigen, "BUNDLE_SEARCH_PATHS", [tmp_path / "nope.joblib"])
+    assert aigen.find_bundle() is None

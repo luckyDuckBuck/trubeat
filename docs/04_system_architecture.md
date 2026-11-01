@@ -194,6 +194,7 @@ trubeat/
 | `E_SHORT_VIDEO` | < 10 s usable | abort — frequency resolution meaningless |
 | `E_NO_FACE` | face found in < 70% of frames | abort |
 | `W_UNSTABLE_TRACK` | intermittent tracking | continue, flag in output |
+| `E_MODEL_MISSING` | AI-video backbone weights not in the local cache | that layer is skipped with the message; `trubeat fetch-models` downloads them (the only network step, user-initiated) |
 | `W_LOW_CONFIDENCE` | weak spectral peak / low vote margin | continue, flag in output |
 
 ## 9. Design principles

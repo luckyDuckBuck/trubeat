@@ -150,85 +150,126 @@ def generator_name(zip_path: str) -> tuple[str, str]:
     return f"{stem.lower()}_{parts[2].lower()}", parts[2].lower()
 
 
-def fetch_aigvd(per_gen: int, extra_real: int, rng: random.Random) -> list[dict]:
-    rows: list[dict] = []
-    test_ids = test_split_ids()
-    log(f"AIGVDBench test split: {len(test_ids)} source ids")
-    wanted_real: set[str] = set()
-    for zp in aigvd_zips():
-        gen, family = generator_name(zp)
-        try:
-            zf = open_remote_zip(zp)
-        except Exception as exc:  # noqa: BLE001 - one bad zip must not stop the run
-            log(f"skip {zp}: {exc}")
+def _zip_seed(seed: int, name: str) -> int:
+    """Deterministic per-zip seed, so parallel workers sample reproducibly."""
+    return seed * 1_000_003 + sum((i + 1) * ord(c) for i, c in enumerate(name))
+
+
+def _fetch_one_zip(zp: str, per_gen: int, test_ids: set[str], seed: int) -> list[dict]:
+    gen, family = generator_name(zp)
+    dest_dir = OUT / "aigvdbench" / gen
+    try:
+        zf = open_remote_zip(zp)
+    except Exception as exc:  # noqa: BLE001 - one bad zip must not stop the run
+        log(f"skip {zp}: {exc}")
+        return []
+    mp4s = [n for n in zf.namelist() if n.lower().endswith(".mp4") and "__MACOSX" not in n]
+    by_base = {Path(n).name: n for n in mp4s}
+    # Resume: clips already on disk count toward the quota first.
+    have = [by_base[f.name] for f in sorted(dest_dir.glob("*.mp4")) if f.name in by_base]
+    in_test = [n for n in mp4s if Path(n).stem in test_ids and n not in have]
+    rest = [n for n in mp4s if n not in have]
+    pool = in_test if len(in_test) >= per_gen - len(have) else rest
+    rng = random.Random(_zip_seed(seed, zp))
+    need = max(0, per_gen - len(have))
+    pick = have[:per_gen] + rng.sample(pool, min(need, len(pool)))
+    log(f"{zp}: {len(mp4s)} clips ({len(in_test)} in test split), {len(have)} on disk, "
+        f"taking {len(pick)}")
+    rows = []
+    for name in pick:
+        dest = dest_dir / Path(name).name
+        if not extract_member(zf, name, dest):
             continue
-        mp4s = [n for n in zf.namelist() if n.lower().endswith(".mp4") and not n.startswith("__MACOSX")]
-        in_test = [n for n in mp4s if Path(n).stem in test_ids]
-        pool = in_test if len(in_test) >= per_gen else mp4s
-        pick = rng.sample(pool, min(per_gen, len(pool)))
-        log(f"{zp}: {len(mp4s)} clips ({len(in_test)} in test split) -> taking {len(pick)}")
-        for name in pick:
-            dest = OUT / "aigvdbench" / gen / Path(name).name
-            if not extract_member(zf, name, dest):
-                continue
-            src_id = Path(name).stem
-            paired = family != "closed" and src_id in test_ids
-            if paired:
-                wanted_real.add(src_id)
-            rows.append({
-                "path": str(dest.relative_to(REPO)), "label": "ai", "generator": gen,
-                "source": "aigvdbench", "family": family,
-                "split_group": f"openvid:{src_id}" if paired else f"aigvd:{gen}:{src_id}",
-            })
-    # Real clips: the sources of the fetched open-source fakes, plus extras.
+        src_id = Path(name).stem
+        paired = family != "closed" and src_id in test_ids
+        rows.append({
+            "path": str(dest.relative_to(REPO)), "label": "ai", "generator": gen,
+            "source": "aigvdbench", "family": family,
+            "split_group": f"openvid:{src_id}" if paired else f"aigvd:{gen}:{src_id}",
+        })
+    log(f"done {zp}: {len(rows)} clips")
+    return rows
+
+
+def _fetch_real_chunk(names: list[str]) -> list[dict]:
     zf = open_remote_zip("AIGVDBench/Real/Real.zip")
-    real_names = {Path(n).stem: n for n in zf.namelist() if n.lower().endswith(".mp4")}
-    others = sorted(set(real_names) - wanted_real)
-    picks = sorted(wanted_real & set(real_names)) + rng.sample(others, min(extra_real, len(others)))
-    log(f"Real.zip: {len(real_names)} clips; taking {len(picks)} "
-        f"({len(wanted_real & set(real_names))} paired with fetched fakes)")
-    for i, sid in enumerate(picks):
-        dest = OUT / "aigvdbench" / "real" / Path(real_names[sid]).name
-        if not extract_member(zf, real_names[sid], dest):
+    rows = []
+    for name in names:
+        dest = OUT / "aigvdbench" / "real" / Path(name).name
+        if not extract_member(zf, name, dest):
             continue
         rows.append({
             "path": str(dest.relative_to(REPO)), "label": "real", "generator": "real",
-            "source": "aigvdbench", "family": "real", "split_group": f"openvid:{sid}",
+            "source": "aigvdbench", "family": "real",
+            "split_group": f"openvid:{Path(name).stem}",
         })
-        if (i + 1) % 100 == 0:
-            log(f"  real {i + 1}/{len(picks)}")
+    return rows
+
+
+def fetch_aigvd(per_gen: int, extra_real: int, seed: int, threads: int) -> list[dict]:
+    from concurrent.futures import ThreadPoolExecutor
+
+    test_ids = test_split_ids()
+    log(f"AIGVDBench test split: {len(test_ids)} source ids; {threads} parallel zips")
+    rows: list[dict] = []
+    with ThreadPoolExecutor(threads) as ex:
+        for part in ex.map(lambda z: _fetch_one_zip(z, per_gen, test_ids, seed), aigvd_zips()):
+            rows += part
+    # Real clips: the OpenVid sources of the fetched open-source fakes first
+    # (content-matched pairs), then extras.
+    wanted = {r["split_group"].split(":", 1)[1] for r in rows if r["split_group"].startswith("openvid:")}
+    zf = open_remote_zip("AIGVDBench/Real/Real.zip")
+    real_names = {Path(n).stem: n for n in zf.namelist() if n.lower().endswith(".mp4")}
+    others = sorted(set(real_names) - wanted)
+    rng = random.Random(seed)
+    picks = sorted(wanted & set(real_names)) + rng.sample(others, min(extra_real, len(others)))
+    log(f"Real.zip: {len(real_names)} clips; taking {len(picks)} "
+        f"({len(wanted & set(real_names))} paired with fetched fakes)")
+    names = [real_names[sid] for sid in picks]
+    chunks = [names[i::threads] for i in range(threads)]
+    with ThreadPoolExecutor(threads) as ex:
+        for part in ex.map(_fetch_real_chunk, chunks):
+            rows += part
     return rows
 
 
 def fetch_genbuster() -> list[dict]:
     from huggingface_hub import hf_hub_download
 
-    zpath = Path(hf_hub_download(GENBUSTER, "GenBuster-Bench.zip", repo_type="dataset",
-                                 local_dir=OUT / "genbuster" / "_zip"))
     root = OUT / "genbuster"
+    on_disk = sorted(root.glob("GenBuster-Bench/**/*.mp4"))
+    if len(on_disk) >= 3000:  # already extracted by an earlier run
+        names = [str(f.relative_to(root)) for f in on_disk]
+        zpath = None
+    else:
+        zpath = Path(hf_hub_download(GENBUSTER, "GenBuster-Bench.zip", repo_type="dataset",
+                                     local_dir=root / "_zip"))
+        with zipfile.ZipFile(zpath) as zf:
+            names = [n for n in zf.namelist()
+                     if n.lower().endswith(".mp4") and "__MACOSX" not in n]
+            for name in names:
+                dest = root / name
+                if not (dest.is_file() and dest.stat().st_size > 0):
+                    extract_member(zf, name, dest)
     rows: list[dict] = []
-    with zipfile.ZipFile(zpath) as zf:
-        for name in zf.namelist():
-            if not name.lower().endswith(".mp4") or "__MACOSX" in name:
-                continue
-            dest = root / name
-            if not (dest.is_file() and dest.stat().st_size > 0):
-                extract_member(zf, name, dest)
-            parts = [p.lower() for p in Path(name).parts]
-            label = "real" if "real" in parts else "ai"
-            # .../<id|ood|wild>/<real|fake>/<generator?>/clip.mp4
-            tier = next((p for p in parts if p in ("id", "ood", "wild")), "unknown")
-            gen = "real"
-            if label == "ai":
-                i = parts.index("fake") if "fake" in parts else len(parts) - 2
-                gen = parts[i + 1] if i + 1 < len(parts) - 1 else "unknown"
-            rows.append({
-                "path": str(dest.relative_to(REPO)), "label": label,
-                "generator": gen if label == "ai" else "real",
-                "source": f"genbuster_{tier}", "family": tier,
-                "split_group": f"genbuster:{tier}:{gen}:{Path(name).stem}",
-            })
-    zpath.unlink(missing_ok=True)  # extracted; keep disk free
+    for name in names:
+        dest = root / name
+        parts = [p.lower() for p in Path(name).parts]
+        label = "real" if "real" in parts else "ai"
+        # .../<id|ood|wild>/<real|fake>/<generator?>/clip.mp4
+        tier = next((p for p in parts if p in ("id", "ood", "wild")), "unknown")
+        gen = "real"
+        if label == "ai":
+            i = parts.index("fake") if "fake" in parts else len(parts) - 2
+            gen = parts[i + 1] if i + 1 < len(parts) - 1 else "unknown"
+        rows.append({
+            "path": str(dest.relative_to(REPO)), "label": label,
+            "generator": gen if label == "ai" else "real",
+            "source": f"genbuster_{tier}", "family": tier,
+            "split_group": f"genbuster:{tier}:{gen}:{Path(name).stem}",
+        })
+    if zpath is not None:
+        zpath.unlink(missing_ok=True)  # extracted; keep disk free
     return rows
 
 
@@ -239,15 +280,15 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--skip-genbuster", action="store_true")
     ap.add_argument("--skip-aigvd", action="store_true")
+    ap.add_argument("--threads", type=int, default=8, help="parallel remote zips")
     args = ap.parse_args()
-    rng = random.Random(args.seed)
     rows: list[dict] = []
     if not args.skip_genbuster:
         log("GenBuster-Bench: downloading the 2.2 GB zip")
         rows += fetch_genbuster()
         log(f"GenBuster-Bench: {len(rows)} clips")
     if not args.skip_aigvd:
-        rows += fetch_aigvd(args.per_generator, args.extra_real, rng)
+        rows += fetch_aigvd(args.per_generator, args.extra_real, args.seed, args.threads)
     df = pd.DataFrame(rows).drop_duplicates("path")
     MANIFEST.parent.mkdir(parents=True, exist_ok=True)
     if MANIFEST.is_file():  # merge with an earlier partial run

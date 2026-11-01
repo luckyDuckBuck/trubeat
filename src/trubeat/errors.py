@@ -21,3 +21,10 @@ class ShortVideo(TrueBeatError):
 
 class NoFace(TrueBeatError):
     code = "E_NO_FACE"
+
+
+class ModelMissing(TrueBeatError):
+    """A model the analysis needs is not in the local cache. Analysis never
+    downloads (AGENTS.md §7); `trubeat fetch-models` does, on request."""
+
+    code = "E_MODEL_MISSING"

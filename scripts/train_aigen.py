@@ -163,7 +163,7 @@ def featurize_one(path: str) -> tuple[str, dict | None, np.ndarray | None, str]:
 
 def featurize_all(paths: list[str], cfg: dict, workers: int) -> pd.DataFrame:
     wcfg = dict(cfg)
-    wcfg["torch_threads"] = max(1, int(cfg["torch_threads"]) // workers)
+    wcfg["torch_threads"] = max(1, int(cfg.get("train_threads", cfg["torch_threads"])) // workers)
     wcfg["max_segments"] = int(cfg.get("train_segments", cfg["max_segments"]))
     recs, failed = [], 0
     t0 = time.time()
@@ -283,6 +283,12 @@ def main() -> None:
     ap.add_argument("--model-out", default=str(REPO / "runs/aigen_detector.joblib"))
     ap.add_argument("--report", default=str(REPO / "reports/aigen_detector.md"))
     ap.add_argument("--skip-robustness", action="store_true")
+    ap.add_argument("--max-pool-real", type=int, default=1500,
+                    help="cap on pool real clips (paired reals kept first)")
+    ap.add_argument("--external-per-group", type=int, default=150,
+                    help="cap per (source, generator, label) in the external set")
+    ap.add_argument("--variant-limit", type=int, default=40,
+                    help="per-group cap for the robustness / as-is subset")
     args = ap.parse_args()
     warnings.filterwarnings("ignore")
     cfg = aigen.merged_config(yaml.safe_load(Path(args.config).read_text()))
@@ -290,6 +296,14 @@ def main() -> None:
     workers = int(cfg.get("workers", 2))
 
     rows = load_rows(Path(args.manifest), Path(args.ffpp_manifest))
+    pool_rows = rows[rows.role == "pool"]
+    pool_ai = pool_rows[pool_rows.label == "ai"]
+    pool_real = pool_rows[pool_rows.label == "real"]
+    paired = pool_real.split_group.isin(set(pool_ai.split_group))
+    pool_real = pd.concat([pool_real[paired], pool_real[~paired].sample(frac=1, random_state=7)])
+    pool_real = pool_real.head(int(args.max_pool_real))
+    ext_rows = cap_rows(rows[rows.role == "external"], int(args.external_per_group))
+    rows = pd.concat([pool_ai, pool_real, ext_rows], ignore_index=True)
     log(f"rows: {len(rows)}\n{rows.groupby(['role', 'source', 'label']).size().to_string()}")
 
     log("normalising every clip to one format")
@@ -345,23 +359,56 @@ def main() -> None:
     ext = ext.assign(score=ext_s, flagged=ext_s >= thr)
     lines = external_tables(ext)
 
-    robust = []
-    if not args.skip_robustness:
-        log("robustness: harsher re-encode of the external set")
-        harsh = normalize_all(ext.path.tolist(), cfg["robustness_normalize"], workers=4)
-        hx = ext.assign(feat_path=ext.path.map(harsh)).dropna(subset=["feat_path"])
-        hf = featurize_all(hx.feat_path.tolist(), cfg, workers)
-        hx = hx.drop(columns=[c for c in hx.columns if c in hf.columns and c != "feat_path"])
-        hx = hx.merge(hf[hf.error == ""], on="feat_path")
-        hs = ai_score(final, hx[cols].to_numpy())
-        for tier, g in hx.assign(score=hs).groupby("source"):
-            if tier == "ffpp_original":
-                continue
-            yy = (g.label == "ai").to_numpy().astype(int)
-            robust.append((tier, safe_auc(yy, g.score.to_numpy()), len(g)))
+    variants = []
+    sub = cap_rows(ext, int(args.variant_limit), seed=7)
+    for name, norm_cfg in (("harsh re-encode (240p, CRF 35)", cfg["robustness_normalize"]),
+                           ("as-is (no re-encode)", None)):
+        if args.skip_robustness:
+            break
+        log(f"variant: {name} on {len(sub)} external clips")
+        if norm_cfg is None:
+            vx = sub.assign(feat_path=sub.path)
+        else:
+            m = normalize_all(sub.path.tolist(), norm_cfg, workers=4)
+            vx = sub.assign(feat_path=sub.path.map(m)).dropna(subset=["feat_path"])
+        vf = featurize_all(vx.feat_path.tolist(), cfg, workers)
+        keep = ["path", "label", "generator", "source", "family", "split_group", "role", "feat_path"]
+        vx = vx[keep].merge(vf[vf.error == ""], on="feat_path")
+        vs = ai_score(final, vx[cols].to_numpy())
+        variants.append((name, compact_eval(vx.assign(score=vs, flagged=vs >= thr))))
+    # the same subset under the training normalisation, for a like-for-like row
+    base = ext[ext.path.isin(set(sub.path))]
+    variants.insert(0, ("training normalisation (360p, CRF 28)", compact_eval(base)))
 
-    write_report(args.report, bundle, best, search, pool, pool_auc, thr, lines, robust, ext)
+    write_report(args.report, bundle, best, search, pool, pool_auc, thr, lines, variants, ext)
     log(f"model -> {args.model_out}\nreport -> {args.report}")
+
+
+def cap_rows(df: pd.DataFrame, per_group: int, seed: int = 7,
+             by: tuple[str, ...] = ("source", "generator", "label")) -> pd.DataFrame:
+    """At most `per_group` rows per (source, generator, label), seeded."""
+    if per_group <= 0:
+        return df
+    return (df.groupby(list(by), group_keys=False)
+              .apply(lambda g: g.sample(min(len(g), per_group), random_state=seed))
+              .reset_index(drop=True))
+
+
+def compact_eval(df: pd.DataFrame) -> dict:
+    """AUC per GenBuster AI tier vs GenBuster reals, FPRs, recall."""
+    gb_real = df[(df.label == "real") & df.source.str.startswith("genbuster")]
+    ff_real = df[df.source == "ffpp_original"]
+    out = {"fpr_genbuster_real": float(gb_real.flagged.mean()) if len(gb_real) else float("nan"),
+           "fpr_ffpp_real": float(ff_real.flagged.mean()) if len(ff_real) else float("nan")}
+    for tier in ("genbuster_id", "genbuster_ood", "genbuster_wild"):
+        fakes = df[(df.source == tier) & (df.label == "ai")]
+        if fakes.empty or gb_real.empty:
+            continue
+        both = pd.concat([gb_real, fakes])
+        y = (both.label == "ai").to_numpy().astype(int)
+        out[f"auc_{tier.split('_')[1]}"] = safe_auc(y, both.score.to_numpy())
+        out[f"recall_{tier.split('_')[1]}"] = float(fakes.flagged.mean())
+    return out
 
 
 def external_tables(ext: pd.DataFrame) -> list[str]:
@@ -443,10 +490,12 @@ def write_report(path, bundle, best, search, pool, pool_auc, thr, ext_lines, rob
     L += ["", "## External evaluation (never seen in training, selection or threshold)", "",
           "| metric | value | 95% CI (Wilson) |", "|---|---|---|"]
     L += ext_lines
-    if robust:
-        L += ["", "## Robustness: harsher re-encode (240p, CRF 35) of the external set", "",
-              "| tier | AUC | n |", "|---|---|---|"]
-        L += [f"| {t} | {a:.3f} | {n} |" for t, a, n in robust]
+    if len(robust) > 1:
+        keys = sorted({k for _, d in robust for k in d})
+        L += ["", "## Robustness and input handling (same external subset, threshold fixed)", "",
+              "| input | " + " | ".join(keys) + " |", "|---" * (len(keys) + 1) + "|"]
+        L += [f"| {name} | " + " | ".join(f"{d.get(k, float('nan')):.3f}" for k in keys) + " |"
+              for name, d in robust]
     L += ["", "## Limits", "",
           ("- Real clips come from OpenVid-HD (AIGVDBench, GenBuster) and FF++ YouTube; other "
            "real content (phone video, screen recordings, animation) is not covered."),

@@ -150,6 +150,27 @@ def cmd_eval(args):
     print(json.dumps(_jsonable({"report": out, **summary})))
 
 
+def cmd_aigen(args):
+    from . import aigen, provenance
+
+    prov = provenance.read_provenance(args.video)
+    bundle = aigen.find_bundle(args.model)
+    out = {"provenance": json.loads(prov.to_json())}
+    if bundle is None:
+        out["aigen"] = {"label": "unknown", "warnings": ["W_NO_AIGEN_MODEL: no trained bundle found"]}
+    else:
+        res = aigen.analyze(args.video, bundle)
+        out["aigen"] = json.loads(res.to_json())
+    print(json.dumps(out))
+
+
+def cmd_fetch_models(args):
+    from . import aigen
+
+    path = aigen.fetch_weights(args.backbone)
+    print(json.dumps({"fetched": args.backbone, "path": path}))
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="trubeat")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -176,6 +197,15 @@ def main() -> None:
     e.add_argument("--model", default=None)
     e.add_argument("--report", default=None)
 
+    ag = sub.add_parser("aigen", help="check one video for AI generation (offline)")
+    ag.add_argument("video")
+    ag.add_argument("--model", default=None,
+                    help="AI-video bundle (default: models/, data/models/, then the packaged copy)")
+
+    fm = sub.add_parser("fetch-models",
+                        help="download the AI-video backbone weights once (the only network step)")
+    fm.add_argument("--backbone", default="vit_small_patch14_dinov2.lvd142m")
+
     s = sub.add_parser("serve", help="run the TrueBeat web app (Gradio)")
     s.add_argument("--port", type=int, default=7860)
     s.add_argument("--share", action="store_true",
@@ -199,7 +229,8 @@ def main() -> None:
                 argv += ["--model", args.model]
             raise SystemExit(appmod.main(argv))
         {"hr": cmd_hr, "train": cmd_train, "predict": cmd_predict,
-         "eval": cmd_eval}[args.cmd](args)
+         "eval": cmd_eval, "aigen": cmd_aigen,
+         "fetch-models": cmd_fetch_models}[args.cmd](args)
     except TrueBeatError as exc:
         print(json.dumps({"error": exc.code, "message": str(exc)}))
         sys.exit(1)

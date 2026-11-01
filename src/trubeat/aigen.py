@@ -31,7 +31,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .errors import ShortVideo, UnreadableVideo
+from .errors import ModelMissing, ShortVideo, UnreadableVideo
 
 DEFAULT_CONFIG: dict = {
     "backbone": "vit_small_patch14_dinov2.lvd142m",
@@ -194,6 +194,27 @@ def sample_segments(path: str | Path, config: dict | None = None) -> tuple[np.nd
 # -------------------------------------------------------------- embedding ---
 
 
+def _hub_repo(backbone: str) -> str:
+    return f"timm/{backbone}"
+
+
+def cached_weights(backbone: str) -> str | None:
+    """Path of the backbone's weights in the local Hugging Face cache, or
+    None. A pure cache lookup: no network."""
+    from huggingface_hub import try_to_load_from_cache
+
+    hit = try_to_load_from_cache(_hub_repo(backbone), "model.safetensors")
+    return hit if isinstance(hit, str) else None
+
+
+def fetch_weights(backbone: str = DEFAULT_CONFIG["backbone"]) -> str:
+    """Download the backbone weights into the local cache (explicit,
+    user-initiated; the analysis path itself never downloads)."""
+    from huggingface_hub import hf_hub_download
+
+    return hf_hub_download(_hub_repo(backbone), "model.safetensors")
+
+
 class Embedder:
     """Frozen backbone -> one L2-normalised embedding per frame (CPU)."""
 
@@ -208,9 +229,17 @@ class Embedder:
         import torch
 
         torch.set_num_threads(int(self.cfg["torch_threads"]))
+        weights = cached_weights(self.cfg["backbone"])
+        if weights is None:
+            raise ModelMissing(
+                f"backbone weights for {self.cfg['backbone']} are not in the local "
+                "cache; run `trubeat fetch-models` once (the only step that downloads)"
+            )
+        # Load from the local file only: analysis never touches the network.
         model = timm.create_model(
             self.cfg["backbone"],
             pretrained=True,
+            pretrained_cfg_overlay={"file": weights},
             img_size=int(self.cfg["img_size"]),
             num_classes=0,
         ).eval()
@@ -371,6 +400,25 @@ class AIGenResult:
         return json.dumps(asdict(self))
 
 
+# Where a trained bundle is looked up (same order as the G2 detector):
+# repo-root overrides first, then the copy packaged with the code.
+BUNDLE_SEARCH_PATHS = [
+    Path("models/aigen.joblib"),
+    Path("data/models/aigen.joblib"),
+    Path(__file__).parent / "models" / "aigen.joblib",
+]
+
+
+def find_bundle(path: str | Path | None = None) -> dict | None:
+    """Load the AI-video bundle from `path` or the search paths; None if absent."""
+    for cand in [Path(path)] if path else BUNDLE_SEARCH_PATHS:
+        if cand.is_file():
+            bundle = load_bundle(cand)
+            bundle.setdefault("_path", str(cand))
+            return bundle
+    return None
+
+
 def load_bundle(path: str | Path) -> dict:
     import joblib
 
@@ -381,34 +429,85 @@ def load_bundle(path: str | Path) -> dict:
     return bundle
 
 
+def normalize_for_inference(path: Path, norm: dict | None, workdir: Path) -> tuple[Path, list[str]]:
+    """Re-encode a clip the way training clips were (configs/p5_aigen.yaml
+    `normalize`), so the detector sees the same format it was fitted on.
+    Falls back to the clip as-is, with a warning, when ffmpeg is missing or
+    fails. Local process only; no network."""
+    import shutil
+    import subprocess
+
+    if not norm:
+        return path, []
+    if shutil.which("ffmpeg") is None:
+        return path, ["W_NO_FFMPEG: analysed as-is; install ffmpeg for training-format input"]
+    s = int(norm["short_side"])
+    out = workdir / "normalized.mp4"
+    cmd = [
+        "ffmpeg", "-nostdin", "-loglevel", "error", "-y", "-i", str(path), "-t", "120",
+        "-vf", f"scale='if(gt(iw,ih),-2,{s})':'if(gt(iw,ih),{s},-2)'",
+        "-c:v", "libx264", "-crf", str(norm["crf"]), "-preset", str(norm["preset"]),
+        "-pix_fmt", "yuv420p", "-an", str(out),
+    ]
+    try:
+        subprocess.run(cmd, check=True, timeout=600, capture_output=True)
+        return out, []
+    except (subprocess.SubprocessError, OSError) as exc:
+        return path, [f"W_NORMALIZE_FAILED: analysed as-is ({type(exc).__name__})"]
+
+
+def segment_scores(seg_emb: np.ndarray, bundle: dict) -> np.ndarray:
+    """Decision value per segment, oriented so positive = AI-generated.
+
+    Training describes each clip by one segment (`train_segments`), so a
+    longer clip is scored segment by segment and the scores averaged,
+    rather than averaging descriptors the model never saw.
+    """
+    model = bundle["model"]
+    classes = list(model.classes_)
+    if sorted(classes) != ["ai", "real"]:
+        raise ValueError(f"unexpected classes {classes}")
+    xs = []
+    for seg in seg_emb:
+        geom = trajectory_features(seg)
+        x, _ = feature_vector(geom, seg.mean(axis=0), bundle["feature_set"])
+        xs.append(x)
+    s = model.decision_function(np.vstack(xs))
+    return s if classes[1] == "ai" else -s
+
+
 def analyze(
-    path: str | Path, bundle: dict, embedder: Embedder | None = None, use_cache: bool = False
+    path: str | Path,
+    bundle: dict,
+    embedder: Embedder | None = None,
+    use_cache: bool = False,
+    normalize: bool = True,
 ) -> AIGenResult:
     """Score one video with a trained bundle (see scripts/train_aigen.py).
 
     Never raises for bad input: unreadable or too-short clips come back as
     label "unknown" with the error code in ``warnings``.
     """
+    import tempfile
+
     cfg = merged_config(bundle["config"])
+    cfg["max_segments"] = int(cfg.get("max_segments", 3))
     embedder = embedder or Embedder(cfg)
-    try:
-        seg_emb, meta = segment_embeddings(path, embedder, cfg, use_cache=use_cache)
-    except (UnreadableVideo, ShortVideo) as exc:
-        return AIGenResult(None, None, float(bundle["threshold"]), "unknown",
-                           feature_set=bundle["feature_set"], warnings=[f"{exc.code}: {exc}"])
-    geom, mean_emb = video_descriptor(seg_emb)
-    x, _ = feature_vector(geom, mean_emb, bundle["feature_set"])
-    model = bundle["model"]
-    score = float(model.decision_function(x.reshape(1, -1))[0])
-    classes = list(model.classes_)
-    p_ai = float(model.predict_proba(x.reshape(1, -1))[0][classes.index("ai")])
-    if classes != ["ai", "real"] and classes != ["real", "ai"]:
-        raise ValueError(f"unexpected classes {classes}")
-    # decision_function is positive for classes_[1]; orient it so positive = AI.
-    if classes[1] != "ai":
-        score = -score
     thr = float(bundle["threshold"])
     warnings: list[str] = []
+    with tempfile.TemporaryDirectory(prefix="trubeat_aigen_") as tmp:
+        src = Path(path)
+        if normalize and src.is_file():
+            src, w = normalize_for_inference(src, cfg.get("normalize"), Path(tmp))
+            warnings += w
+        try:
+            seg_emb, meta = segment_embeddings(src, embedder, cfg, use_cache=use_cache)
+        except (UnreadableVideo, ShortVideo) as exc:
+            return AIGenResult(None, None, thr, "unknown", feature_set=bundle["feature_set"],
+                               warnings=warnings + [f"{exc.code}: {exc}"])
+    scores = segment_scores(seg_emb, bundle)
+    score = float(np.mean(scores))
+    p_ai = float(1.0 / (1.0 + np.exp(-score)))  # logistic link of the mean logit
     if meta.get("n_segments", 0) < 2:
         warnings.append("W_SHORT_CLIP: one 2 s segment analysed; lower confidence")
     return AIGenResult(
