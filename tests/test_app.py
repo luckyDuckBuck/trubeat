@@ -19,14 +19,13 @@ from trubeat.app import PulseAnalysis, VerdictThresholds, verdict_for
 THR = VerdictThresholds(
     min_duration_s=10.0,
     min_face_valid_frac=0.70,
-    min_snr=10.0,
-    max_agreement_bpm=5.0,
-    detector_threshold=0.0,
+    min_pulse_snr_db=0.0,
+    faceswap_threshold=-0.6,
 )
 
 
 def _analysis(**kw) -> PulseAnalysis:
-    """A healthy analysis; override fields per test."""
+    """An analysis where every layer ran and nothing fired; override per test."""
     base = {
         "verdict": "inconclusive",
         "headline": "",
@@ -35,184 +34,140 @@ def _analysis(**kw) -> PulseAnalysis:
         "roi_names": ["forehead", "cheek_l", "cheek_r"],
         "agreement_bpm": 0.2,
         "face_valid_frac": 1.0,
-        "mean_snr": 40.0,
+        "pulse_snr_db": -3.0,
+        "pulse_measurable": False,
         "duration_s": 30.0,
         "n_frames": 900,
-        "detector_score": 1.0,
+        "detector_score": 0.5,
         "detector_available": True,
         "degraded": False,
+        "ai_label": "real",
+        "ai_probability": 0.2,
+        "ai_score": -1.0,
+        "ai_threshold": 0.4,
+        "ai_available": True,
+        "provenance": {"has_c2pa": False, "ai_declared": False},
+        "layers": {"provenance": "no Content Credentials", "ai_video": "ran", "pulse": "ran"},
     }
     base.update(kw)
     return PulseAnalysis(**base)
 
 
 # ---------------------------------------------------------------- verdict ---
+# docs/11 E1: provenance > AI-video detector > strict face-swap > "no sign".
 
 
-def test_verdict_real_when_pulse_consistent_and_score_above():
-    a = verdict_for(_analysis(detector_score=1.0), THR)
+def test_nothing_fires_means_no_sign_of_ai_never_authentic():
+    a = verdict_for(_analysis(), THR)
     assert a.verdict == "real"
-    assert a.headline.startswith("Pulse consistent")
-    assert "likely real" in a.headline
+    assert a.decided_by == "ai_video"
+    assert a.headline == "No sign of AI generation found"
+    assert "authentic" not in a.headline.lower()
+    assert "not proof" in a.detail
 
 
-def test_verdict_real_but_regions_disagree_does_not_claim_agreement():
-    # The headline must not claim the regions agree when the measurement
-    # says otherwise — that would be a false statement in the UI.
+def test_ai_detector_over_threshold_is_fake():
+    a = verdict_for(_analysis(ai_label="ai", ai_score=1.2, ai_probability=0.77), THR)
+    assert a.verdict == "fake" and a.decided_by == "ai_video"
+    assert a.headline == "Likely AI-generated"
+    assert "+1.20" in a.detail and "+0.40" in a.detail and "77%" in a.detail
+
+
+def test_provenance_declaration_outranks_the_detectors():
     a = verdict_for(
-        _analysis(detector_score=1.0, agreement_bpm=THR.max_agreement_bpm + 5.0),
+        _analysis(provenance={"has_c2pa": True, "ai_declared": True, "generator": "GenModel 2",
+                              "validation_state": "Valid"}),
         THR,
     )
-    assert a.verdict == "real"
-    assert "Pulse consistent" not in a.headline
-    assert "disagree" in a.headline
+    assert a.verdict == "fake" and a.decided_by == "provenance"
+    assert "Content Credentials" in a.headline
+    assert "GenModel 2" in a.detail
 
 
-def test_verdict_fake_without_inconsistency_does_not_claim_the_signature():
-    # Detector says fake but the regions agree: report the call without
-    # inventing a pulse-inconsistency story.
+def test_unverified_provenance_still_decides_but_says_so():
     a = verdict_for(
-        _analysis(detector_score=-1.0, agreement_bpm=0.5), THR
-    )
-    assert a.verdict == "fake"
-    assert "pixel-replacement pattern detected" not in a.headline
-    assert "another manipulation family" in a.detail
-
-
-def test_verdict_fake_when_score_below_threshold():
-    a = verdict_for(
-        _analysis(detector_score=-1.0, agreement_bpm=THR.max_agreement_bpm + 5.0),
-        THR,
-    )
-    assert a.verdict == "fake"
-    assert a.headline.startswith("Pulse inconsistent")
-    assert "pixel-replacement" in a.headline
-
-
-def test_verdict_boundary_score_exactly_at_threshold_is_real():
-    # score >= threshold -> real (the boundary belongs to the real side).
-    a = verdict_for(_analysis(detector_score=THR.detector_threshold), THR)
-    assert a.verdict == "real"
-
-
-def test_verdict_boundary_score_just_below_threshold_is_fake():
-    a = verdict_for(_analysis(detector_score=THR.detector_threshold - 1e-9), THR)
-    assert a.verdict == "fake"
-
-
-def test_verdict_boundary_agreement_exactly_at_max_is_consistent():
-    a = verdict_for(
-        _analysis(agreement_bpm=THR.max_agreement_bpm, detector_score=1.0), THR
-    )
-    assert a.verdict == "real"
-
-
-def test_verdict_boundary_agreement_just_over_max_is_fake_not_inconclusive():
-    # A readable pulse with disagreeing regions is a *fake* verdict, not an
-    # inconclusive one: the QC passed, so we do have something to say.
-    a = verdict_for(
-        _analysis(agreement_bpm=THR.max_agreement_bpm + 0.1, detector_score=-1.0),
+        _analysis(provenance={"has_c2pa": True, "ai_declared": True,
+                              "validation_state": "Invalid"}),
         THR,
     )
     assert a.verdict == "fake"
-    assert "do not agree on one pulse" in a.detail
+    assert "'Invalid'" in a.detail
 
 
-def test_verdict_boundary_face_valid_frac_exactly_at_min_is_ok():
+def test_faceswap_boundary_is_inclusive():
+    at = verdict_for(_analysis(detector_score=THR.faceswap_threshold), THR)
+    above = verdict_for(_analysis(detector_score=THR.faceswap_threshold + 1e-9), THR)
+    assert at.verdict == "fake" and at.decided_by == "face_swap"
+    assert at.headline == "Possible face-swap"
+    assert "weak" in at.detail
+    assert above.verdict == "real"
+
+
+def test_ai_detector_outranks_the_faceswap_check():
+    a = verdict_for(_analysis(ai_label="ai", ai_score=1.0, ai_probability=0.7,
+                              detector_score=-5.0), THR)
+    assert a.decided_by == "ai_video"
+
+
+def test_short_clip_still_gets_a_verdict_from_the_ai_detector():
+    """The 10 s pulse minimum no longer ends the analysis (docs/11 F3)."""
     a = verdict_for(
-        _analysis(face_valid_frac=THR.min_face_valid_frac, detector_score=1.0), THR
+        _analysis(duration_s=6.0, detector_score=None, detector_available=True,
+                  layers={"ai_video": "ran", "pulse": "skipped: clip shorter than the 10 s"}),
+        THR,
     )
     assert a.verdict == "real"
+    assert "face-swap check did not run" in a.detail
 
 
-def test_verdict_boundary_face_valid_frac_just_below_min_is_inconclusive():
+def test_without_the_ai_detector_a_passing_faceswap_check_is_not_a_real_verdict():
+    """The face-swap check alone is too weak to clear a video."""
     a = verdict_for(
-        _analysis(face_valid_frac=THR.min_face_valid_frac - 0.01), THR
+        _analysis(ai_label="unknown", ai_score=None, ai_available=False,
+                  layers={"ai_video": "not available: no trained AI-video model installed",
+                          "pulse": "face tracked in 100% of frames"}),
+        THR,
     )
     assert a.verdict == "inconclusive"
-    assert "face tracked in only" in a.detail
+    assert "ai_video: not available" in a.detail
 
 
-def test_verdict_boundary_snr_exactly_at_min_is_ok():
-    a = verdict_for(_analysis(mean_snr=THR.min_snr, detector_score=1.0), THR)
-    assert a.verdict == "real"
-
-
-def test_verdict_boundary_snr_just_below_min_is_inconclusive():
-    a = verdict_for(_analysis(mean_snr=THR.min_snr - 0.01), THR)
-    assert a.verdict == "inconclusive"
-    assert "no measurable pulse" in a.detail
-
-
-def test_verdict_boundary_duration_exactly_at_min_is_ok():
+def test_nothing_ran_is_inconclusive_with_a_reason_per_layer():
     a = verdict_for(
-        _analysis(duration_s=THR.min_duration_s, detector_score=1.0), THR
-    )
-    assert a.verdict == "real"
-
-
-def test_verdict_boundary_duration_just_below_min_is_inconclusive():
-    a = verdict_for(_analysis(duration_s=THR.min_duration_s - 0.1), THR)
-    assert a.verdict == "inconclusive"
-    assert "shorter than" in a.detail
-
-
-def test_verdict_no_face_is_inconclusive():
-    a = verdict_for(_analysis(face_valid_frac=0.0), THR)
-    assert a.verdict == "inconclusive"
-    assert "no face was tracked" in a.detail
-
-
-def test_verdict_no_agreement_estimate_is_inconclusive():
-    a = verdict_for(_analysis(agreement_bpm=None), THR)
-    assert a.verdict == "inconclusive"
-    assert "heart rate in enough regions" in a.detail
-
-
-def test_verdict_qc_gates_beat_the_detector():
-    # Even a decisive detector score must not override a failed QC gate.
-    a = verdict_for(
-        _analysis(mean_snr=0.0, detector_score=-99.0), THR
+        _analysis(ai_label="unknown", ai_score=None, detector_score=None,
+                  layers={"ai_video": "could not analyse: E_SHORT_VIDEO",
+                          "pulse": "skipped: clip shorter than the 10 s"}),
+        THR,
     )
     assert a.verdict == "inconclusive"
+    assert a.decided_by == ""
+    assert "ai_video: could not analyse" in a.detail and "pulse: skipped" in a.detail
 
 
-def test_verdict_degraded_mode_without_detector():
-    # No model: the pulse is still measured, but no real/fake claim is made.
-    a = verdict_for(
-        _analysis(detector_score=None, detector_available=False, degraded=True), THR
-    )
+def test_unreadable_file_says_so():
+    a = app_mod.analyze_video("/definitely/not/here.mp4")
     assert a.verdict == "inconclusive"
-    assert "no detector model" in a.headline
-    assert "W_NO_DETECTOR" in a.warnings
+    assert a.headline == "Inconclusive: could not read the video"
 
 
-def test_verdict_inconclusive_lists_a_warning_per_reason():
-    a = verdict_for(
-        _analysis(duration_s=5.0, face_valid_frac=0.1, mean_snr=0.0), THR
-    )
-    assert a.verdict == "inconclusive"
-    assert len([w for w in a.warnings if w.startswith("W_QC")]) >= 3
+def test_the_pulse_alone_never_decides():
+    """A measurable or unmeasurable pulse changes no verdict (docs/11 B2)."""
+    for snr, ok in ((-6.0, False), (+4.0, True)):
+        a = verdict_for(_analysis(pulse_snr_db=snr, pulse_measurable=ok), THR)
+        assert a.verdict == "real" and a.decided_by == "ai_video"
 
 
 def test_caveat_states_the_measured_envelope():
-    assert "0.73" in app_mod.CAVEAT
-    assert "Deepfakes" in app_mod.CAVEAT
-    assert "Face2Face" in app_mod.CAVEAT
-    assert "NeuralTextures" in app_mod.CAVEAT
-    assert "reports/g2_detector.md" in app_mod.CAVEAT
+    c = app_mod.CAVEAT
+    assert "31 generators" in c and "reports/aigen_detector.md" in c
+    assert "Face2Face" in c and "NeuralTextures" in c
+    assert "not proof" in c
 
 
 def test_thresholds_live_in_one_place():
-    # Every threshold the verdict uses is a field of VerdictThresholds.
-    fields = {f for f in VerdictThresholds.__dataclass_fields__}
-    assert {
-        "min_duration_s",
-        "min_face_valid_frac",
-        "min_snr",
-        "max_agreement_bpm",
-        "detector_threshold",
-    } <= fields
+    fields = set(VerdictThresholds.__dataclass_fields__)
+    assert {"min_duration_s", "min_face_valid_frac", "min_pulse_snr_db",
+            "faceswap_threshold"} <= fields
 
 
 def test_load_detector_returns_none_when_missing(tmp_path):
@@ -261,14 +216,21 @@ needs_model = pytest.mark.skipif(
 )
 
 
+@pytest.fixture
+def no_aigen(monkeypatch):
+    """Integration tests must not depend on a trained AI-video bundle."""
+    monkeypatch.setattr(app_mod, "load_aigen", lambda path=None: (None, None))
+
+
 @needs_model
-def test_integration_synthetic_video_runs_the_pipeline(tmp_path):
-    """A synthetic pulse video has no face: the pipeline must run end to
-    end and return an inconclusive verdict with the reason, not crash."""
+def test_integration_synthetic_video_runs_the_pipeline(tmp_path, no_aigen):
+    """A synthetic pulse video has no face: every layer runs or says why,
+    and with no AI-video model the verdict is inconclusive, not a crash."""
     p = synth.write_pulse_video(tmp_path / "v.mp4", fps=30.0, duration_s=12.0)
     a = app_mod.analyze_video(p, config={"method": "green"})
     assert a.verdict == "inconclusive"
-    assert "no face was tracked" in a.detail
+    assert "ai_video: not available" in a.detail
+    assert "face tracked in 0% of frames" in a.layers["pulse"]
     assert a.duration_s == pytest.approx(12.0, abs=0.5)
     assert a.face_valid_frac == 0.0
     assert a.detector_available is True  # the model exists
@@ -276,14 +238,30 @@ def test_integration_synthetic_video_runs_the_pipeline(tmp_path):
     # (docs/11 F10: this clip type used to show a meaningless "+4.925").
     assert a.detector_score is None
     assert len(a.roi_waveforms) == 3  # the plot data was produced anyway
-    assert "W_QC" in " ".join(a.warnings)
+    assert "no Content Credentials" in a.layers["provenance"]
 
 
 @needs_model
-def test_integration_short_video_is_inconclusive(tmp_path):
+def test_integration_short_video_skips_only_the_pulse_layer(tmp_path, no_aigen):
     p = synth.write_pulse_video(tmp_path / "short.mp4", fps=30.0, duration_s=4.0)
     a = app_mod.analyze_video(p, config={"method": "green"})
-    assert a.verdict == "inconclusive"
+    assert a.layers["pulse"].startswith("skipped: clip shorter")
+    assert "provenance" in a.layers  # the other layers still ran
+    assert a.verdict == "inconclusive"  # no AI-video model in this test
+
+
+def test_integration_short_video_gets_an_ai_verdict(tmp_path, monkeypatch):
+    """With an AI-video bundle, a 4 s clip is scored (docs/11 F3)."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from test_aigen import _StubEmbedder, _tiny_bundle
+
+    bundle = _tiny_bundle()
+    monkeypatch.setattr(app_mod, "load_aigen", lambda path=None: (bundle, _StubEmbedder()))
+    p = synth.write_pulse_video(tmp_path / "short.mp4", fps=30.0, duration_s=4.0)
+    a = app_mod.analyze_video(p, config={"method": "green"}, layers=("provenance", "ai_video"))
+    assert a.ai_available and a.ai_label in ("ai", "real")
+    assert a.verdict in ("fake", "real")
+    assert a.decided_by == "ai_video"
 
 
 def test_integration_missing_file_is_inconclusive_not_a_crash(tmp_path):
@@ -302,9 +280,11 @@ def test_cli_exposes_serve():
 
 
 def test_evidence_table_explains_a_missing_score():
-    """The detector-score row says *why* there is no score."""
+    """The face-swap row says *why* there is no score."""
     with_score = app_mod._evidence_text(_analysis(detector_score=-0.5))
-    assert "| detector score | -0.500 |" in with_score
+    assert "| face-swap check | score -0.50 (flags at <=" in with_score
+    assert "| AI-video detector | score -1.00 (flags at >= +0.40); probability 20% |" in with_score
+    assert "(not reliable: pulse not measurable)" in with_score
     no_face = app_mod._evidence_text(
         _analysis(detector_score=None, detector_available=True, face_valid_frac=0.0)
     )

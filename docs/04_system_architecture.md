@@ -58,7 +58,18 @@ uses — it does not reimplement any stage. Its analysis half
 (`analyze_video`) is a pure function returning a `PulseAnalysis`
 (three-state verdict + per-region heart rate, inter-region agreement,
 `face_valid_frac`, SNR, ROI waveforms), and the interface half
-(`build_demo`) is Gradio wiring. A browser extension can therefore reuse
+(`build_demo`) is Gradio wiring.
+
+Since 2026-11-01 (docs/11 E1) `analyze_video` runs three independent layers
+and fuses them: C2PA provenance (`provenance.py`), the whole-frame
+AI-video detector (`aigen.py`, clips >= 2 s), and the pulse / face-swap
+layer above (clips >= 10 s). Priority: provenance declaring AI generation >
+AI-video detector over its threshold > strict face-swap score > "no sign
+of AI generation found" when the AI-video detector ran and nothing fired;
+otherwise inconclusive, with `layers` saying why per layer. The pulse
+itself no longer decides: on web video it is not measurable for real faces
+either (docs/11 B2). `PulseAnalysis` gained `ai_*`, `provenance`, `layers`,
+`decided_by`, `pulse_snr_db` (dB) and lost the peak/mean `mean_snr`. A browser extension can therefore reuse
 `analyze_video` — over Gradio's built-in API or a purpose-built one —
 without a second implementation.
 

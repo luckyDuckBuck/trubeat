@@ -44,11 +44,15 @@ MODEL_SEARCH_PATHS = [
 # None means "search MODEL_SEARCH_PATHS in order".
 DEFAULT_MODEL_PATH = None
 
-# Always-visible honesty caveat (G2's measured operating envelope).
+# Always-visible honesty caveat: the measured operating envelope of each
+# layer (reports/aigen_detector.md, reports/g2_detector.md, docs/11).
 CAVEAT = (
-    "Detects face-swap-style fakes (research AUC 0.73 on the Deepfakes "
-    "family). Cannot detect reenactment fakes (Face2Face, NeuralTextures): "
-    "those keep the original pulse. Details: reports/g2_detector.md."
+    "Checks for fully AI-generated video with a whole-frame detector (trained "
+    "on 31 generators; it misses some new ones and flags a small share of real "
+    "videos, see reports/aigen_detector.md), reads C2PA Content Credentials "
+    "when present, and runs a weak face-swap check (catches about a quarter of "
+    "Deepfakes-style swaps; blind to reenactment fakes such as Face2Face and "
+    "NeuralTextures). 'No sign of AI generation' is not proof a video is real."
 )
 
 # Analysis is capped so a long upload cannot run for an hour.
@@ -57,40 +61,41 @@ MAX_ANALYSIS_SECONDS = 120.0
 
 @dataclass(frozen=True)
 class VerdictThresholds:
-    """Every threshold the three-state verdict uses, in one place.
+    """Every threshold the fused verdict uses, in one place (docs/11 E1).
 
-    The QC gates come from the project's own rules (docs/04 §8):
-    ``E_SHORT_VIDEO`` at 10 s and ``W_UNSTABLE_TRACK`` below 70% face
-    tracking. The signal gates are calibrated against measurements:
-
-    * ``min_snr`` — the cached-trace SNR (peak/mean in-band power). Videos
-      with no measurable pulse read ~0; videos with a pulse read 25-75
-      (FF++ usable median ~33, UBFC 48-75). 10 sits an order of magnitude
-      above noise and far below any real pulse.
-    * ``max_agreement_bpm`` — the spread of the per-ROI heart rates of one
-      face. When the pulse is visible the regions agree closely (UBFC
-      subject1: 0.03 bpm); when one region locks onto a different peak the
-      spread jumps (subject16: 21.4 bpm). 5 bpm separates "all regions
-      agree" from "they do not".
+    * The AI-video detector's threshold travels inside its bundle: set on
+      out-of-fold real clips for a 5% false-positive rate, never on test
+      data (scripts/train_aigen.py).
+    * ``faceswap_threshold``: G2 rPPG-consistency score at or below which a
+      face-swap is flagged. Strict on purpose: the validated G2 threshold
+      flagged 24% of real test videos. This one was set on FF++ c23 val
+      reals (n=30) for 5% and measured once on FF++ c23 test: 3 of 135 real
+      videos flagged (2.2%); recall Deepfakes 24%, FaceSwap 7%, Face2Face
+      3%, NeuralTextures 0%.
+    * ``min_duration_s`` / ``min_face_valid_frac``: when the face-swap score
+      is computed at all (docs/04 §8: 10 s, 70% tracking).
+    * ``min_pulse_snr_db``: when the pulse counts as measurable
+      (``hr.pulse_snr_db``; noise and drift stay at or below 0 dB, docs/11
+      B2). Evidence only: on web video real faces read below it too.
     """
 
     min_duration_s: float = 10.0
     min_face_valid_frac: float = 0.70
-    min_snr: float = 10.0
-    max_agreement_bpm: float = 5.0
-    # Operating threshold of the real/fake decision, taken from the G2 run
-    # (tuned on the validation split, never on test).
-    detector_threshold: float = 0.0
+    min_pulse_snr_db: float = 0.0
+    faceswap_threshold: float = -0.605
 
 
-# The default thresholds, with the G2 threshold filled in from the model
-# bundle when one is available.
 DEFAULT_THRESHOLDS = VerdictThresholds()
 
 
 @dataclass
 class PulseAnalysis:
-    """Everything the verdict and the UI need, from one video."""
+    """Everything the verdict and the UI need, from one video.
+
+    Three independent layers fill it (docs/11 §4): provenance (C2PA), the
+    whole-frame AI-video detector, and the pulse / face-swap layer.
+    ``layers`` records what each one did, in words the UI shows.
+    """
 
     verdict: str  # "real" | "fake" | "inconclusive"
     headline: str  # one-line, human-readable verdict
@@ -99,12 +104,21 @@ class PulseAnalysis:
     roi_names: list[str] = field(default_factory=list)
     agreement_bpm: float | None = None
     face_valid_frac: float = 0.0
-    mean_snr: float = 0.0
+    pulse_snr_db: float | None = None  # mean over regions (hr.pulse_snr_db)
+    pulse_measurable: bool | None = None
     duration_s: float = 0.0
     n_frames: int = 0
-    detector_score: float | None = None  # mean decision value (positive = real)
+    detector_score: float | None = None  # G2 face-swap score (positive = real)
     detector_available: bool = False
-    degraded: bool = False  # no detector model -> pulse/HR analyzer only
+    degraded: bool = False  # no G2 model -> pulse/HR analyzer only
+    ai_label: str = "unknown"  # "ai" | "real" | "unknown"
+    ai_probability: float | None = None  # detector's P(AI-generated)
+    ai_score: float | None = None  # decision value (positive = AI)
+    ai_threshold: float | None = None
+    ai_available: bool = False
+    provenance: dict = field(default_factory=dict)
+    layers: dict = field(default_factory=dict)  # layer -> what happened
+    decided_by: str = ""  # "provenance" | "ai_video" | "face_swap" | ""
     warnings: list[str] = field(default_factory=list)
     roi_waveforms: list[list[float]] = field(default_factory=list)  # 3 x T
     waveform_names: list[str] = field(default_factory=list)
@@ -148,63 +162,147 @@ def load_detector(model_path: Path | str | None = DEFAULT_MODEL_PATH):
     return None
 
 
+# One loaded AI-video bundle + backbone per process: loading DINOv2 takes
+# seconds, analysing a clip should not pay that every time.
+_AIGEN_CACHE: dict[str, tuple] = {}
+
+
+def load_aigen(path: Path | str | None = None):
+    """(bundle, Embedder) for the AI-video layer, or (None, None)."""
+    from . import aigen
+
+    key = str(path) if path else "<search>"
+    if key not in _AIGEN_CACHE:
+        try:
+            bundle = aigen.find_bundle(path)
+        except Exception as exc:  # noqa: BLE001 — a broken bundle must not break the app
+            print(f"warning: could not load AI-video bundle: {exc}")
+            bundle = None
+        emb = aigen.Embedder(bundle["config"]) if bundle else None
+        _AIGEN_CACHE[key] = (bundle, emb)
+    return _AIGEN_CACHE[key]
+
+
 def analyze_video(
     video_path: str | Path,
     config: dict | None = None,
     model_path: Path | str | None = DEFAULT_MODEL_PATH,
     thresholds: VerdictThresholds | None = None,
     max_seconds: float = MAX_ANALYSIS_SECONDS,
+    aigen_path: Path | str | None = None,
+    layers: tuple[str, ...] = ("provenance", "ai_video", "pulse"),
 ) -> PulseAnalysis:
-    """Run the full pipeline on one video and return the analysis.
+    """Run every analysis layer on one video and fuse them (docs/11 E1).
 
-    Uses exactly the same modules the CLI uses: ``ingest.open_video`` →
-    ``face.track_landmarks`` → ``roi.extract_roi_means`` →
-    ``signal.extract_ppg`` → ``features.window_features`` → the G2 detector.
-
-    Never raises for bad input: a video that cannot be analysed comes back
-    as an ``inconclusive`` analysis with the reason in ``detail``.
+    Layers are independent: a clip too short for the pulse layer (< 10 s)
+    is still checked for provenance and by the AI-video detector (>= 2 s).
+    Never raises for bad input: what each layer could not do is recorded in
+    ``layers`` and, when nothing could run, the verdict is inconclusive.
     """
     config = dict(config or {})
     thr = thresholds or DEFAULT_THRESHOLDS
     path = Path(video_path)
+    a = PulseAnalysis(verdict="inconclusive", headline="", detail="")
+    if not path.is_file():
+        a.warnings.append("E_UNREADABLE")
+        a.layers["file"] = f"not a readable file: {path.name}"
+        return verdict_for(a, thr)
+    if "provenance" in layers:
+        _provenance_layer(a, path)
+    if "ai_video" in layers:
+        _ai_video_layer(a, path, aigen_path)
+    if "pulse" in layers:
+        _pulse_layer(a, path, config, model_path, thr, max_seconds)
+    return verdict_for(a, thr)
 
-    # ---- ingest (errors become an inconclusive verdict, never a crash) ----
+
+def _provenance_layer(a: PulseAnalysis, path: Path) -> None:
+    from . import provenance
+
+    r = provenance.read_provenance(path)
+    a.provenance = asdict(r)
+    a.warnings += [w for w in r.warnings if w not in a.warnings]
+    if r.ai_declared:
+        a.layers["provenance"] = "Content Credentials declare AI generation"
+    elif r.has_c2pa:
+        a.layers["provenance"] = "Content Credentials present, no AI declaration"
+    else:
+        a.layers["provenance"] = "no Content Credentials (re-encoding usually strips them)"
+
+
+def _ai_video_layer(a: PulseAnalysis, path: Path, aigen_path) -> None:
+    from . import aigen
+    from .errors import ModelMissing
+
+    bundle, embedder = load_aigen(aigen_path)
+    if bundle is None:
+        a.layers["ai_video"] = "not available: no trained AI-video model installed"
+        a.warnings.append("W_NO_AIGEN_MODEL")
+        return
+    try:
+        res = aigen.analyze(path, bundle, embedder=embedder)
+    except ModelMissing as exc:
+        a.layers["ai_video"] = f"not available: {exc}"
+        a.warnings.append(exc.code)
+        return
+    except Exception as exc:  # noqa: BLE001 — the app must not crash
+        a.layers["ai_video"] = f"failed: {type(exc).__name__}: {exc}"
+        a.warnings.append("W_AIGEN_FAILED")
+        return
+    a.ai_available = True
+    a.ai_label = res.label
+    a.ai_probability = res.p_ai
+    a.ai_score = res.score
+    a.ai_threshold = res.threshold
+    a.warnings += [w for w in res.warnings if w not in a.warnings]
+    if res.label == "unknown":
+        a.layers["ai_video"] = "could not analyse: " + (res.warnings[-1] if res.warnings else "")
+    else:
+        a.layers["ai_video"] = (
+            f"{'flags AI generation' if res.label == 'ai' else 'no AI-generation signs'} "
+            f"(score {res.score:+.2f}, threshold {res.threshold:+.2f}, "
+            f"{res.n_segments} segment{'s' if res.n_segments != 1 else ''})"
+        )
+    if not a.duration_s and res.duration_s:
+        a.duration_s = float(res.duration_s)
+
+
+def _pulse_layer(
+    a: PulseAnalysis, path: Path, config: dict, model_path, thr: VerdictThresholds,
+    max_seconds: float,
+) -> None:
+    """Face tracking, per-region pulse, and the G2 face-swap score."""
     try:
         stream = ingest.open_video(
             str(path),
             frame_height=config.get("frame_height", ingest.DEFAULT_FRAME_HEIGHT),
         )
     except TrueBeatError as exc:
-        a = PulseAnalysis(
-            verdict="inconclusive",
-            headline="Inconclusive: could not read the video",
-            detail=f"{exc.code}: {exc}",
-        )
-        a.warnings.append(f"{exc.code}")
-        return a
+        if exc.code == "E_SHORT_VIDEO":
+            a.layers["pulse"] = "skipped: clip shorter than the 10 s the pulse layer needs"
+        else:
+            a.layers["pulse"] = f"skipped: {exc.code}: {exc}"
+            if exc.code == "E_UNREADABLE":
+                a.warnings.append("E_UNREADABLE")
+        a.warnings.append(f"W_PULSE_SKIPPED: {exc.code}")
+        return
     except Exception as exc:  # noqa: BLE001 — the app must not crash
-        a = PulseAnalysis(
-            verdict="inconclusive",
-            headline="Inconclusive: could not read the video",
-            detail=f"unreadable video: {exc}",
-        )
+        a.layers["pulse"] = f"skipped: unreadable video ({exc})"
         a.warnings.append("E_UNREADABLE")
-        return a
+        return
 
     duration = float(stream.duration_s)
+    fps = stream.fps
+    frames = stream.frames
     if duration > max_seconds:
-        # Analyse the first `max_seconds` of the clip (frames are decoded
-        # from the container, so we simply use the leading window).
-        keep = int(max_seconds * stream.fps)
-        frames = stream.frames[:keep]
-        fps = stream.fps
-    else:
-        frames = stream.frames
-        fps = stream.fps
+        # Analyse the first `max_seconds` of the clip.
+        frames = frames[: int(max_seconds * fps)]
+        a.warnings.append(
+            f"W_TRUNCATED: analysed the first {max_seconds:.0f}s of a {duration:.0f}s clip"
+        )
 
-    # ---- the detector bundle decides the rPPG method and window ---------
-    # (the bundle was trained with a specific method; using the config's
-    # method instead would silently feed the model the wrong features).
+    # The G2 bundle decides the rPPG method and window (it was trained with
+    # them; using the config's would feed the model the wrong features).
     bundle = load_detector(model_path)
     if bundle is not None:
         method = str(bundle.get("method") or config.get("method", "green"))
@@ -213,7 +311,6 @@ def analyze_video(
         method = str(config.get("method", "green"))
         win_s = float(config.get("window_s", 10.0))
 
-    # ---- face → ROI → signal -------------------------------------------
     landmarks, valid = face.track_landmarks(frames, fps)
     face_valid_frac = float(np.mean(valid)) if len(valid) else 0.0
     traces = roi.extract_roi_means(
@@ -222,90 +319,70 @@ def analyze_video(
     ppg = signal.extract_ppg(traces, fps, method=method)
     names = _roi_names(config)
 
-    # ---- QC + per-region heart rate ------------------------------------
+    # Heart rate and pulse SNR on the band-passed signal (docs/11 B1a/B2):
+    # the raw green channel locks the spectral peak onto slow drift.
     hr_band = tuple(config.get("band", (0.7, 3.0)))
     per_roi_hr: list[float] = []
+    snrs: list[float] = []
     for r in range(ppg.shape[1]):
-        res = hr.estimate_hr(ppg[:, r], fps, band=hr_band)
-        per_roi_hr.append(float(res.bpm) if np.isfinite(res.bpm) else float("nan"))
+        try:
+            cond = signal.condition(ppg[:, r], fps, band=hr_band)
+        except ValueError:
+            cond = ppg[:, r]
+        bpm = hr.estimate_hr(cond, fps, band=hr_band).bpm
+        per_roi_hr.append(float(bpm) if np.isfinite(bpm) else float("nan"))
+        snr = hr.pulse_snr_db(cond, fps, bpm=bpm if np.isfinite(bpm) else None, band=hr_band)
+        if np.isfinite(snr):
+            snrs.append(float(snr))
     finite = [b for b in per_roi_hr if np.isfinite(b)]
-    agreement = float(np.std(finite)) if len(finite) > 1 else None
-    mean_snr = _mean_snr(ppg, fps)
 
-    # ---- detector (optional) -------------------------------------------
+    # G2 face-swap score: only on a tracked face (an untracked face gives
+    # zero-filled traces, docs/11 F10).
     detector_score: float | None = None
-    degraded = bundle is None
-    # Without a tracked face the ROI traces are interpolated/zero-filled, so
-    # any detector score would be computed on fabricated input (docs/11 F10:
-    # a faceless clip showed "+4.925"). The QC gate makes such clips
-    # inconclusive anyway; the score is simply not computed.
     face_ok = face_valid_frac >= thr.min_face_valid_frac
     if bundle is not None and face_ok:
         try:
             feat = features.window_features(
-                ppg, fps,
-                win_s=win_s,
-                overlap=float(config.get("overlap", 0.5)),
+                ppg, fps, win_s=win_s, overlap=float(config.get("overlap", 0.5))
             )
             cols = bundle.get("feature_columns") or list(features.FEATURE_COLUMNS)
             if len(feat) and all(c in feat.columns for c in cols):
-                det = bundle["model"]
-                dec = np.asarray(det.decision_function(feat[cols]), dtype=float).ravel()
+                dec = np.asarray(bundle["model"].decision_function(feat[cols]), dtype=float)
                 detector_score = float(np.mean(dec)) if dec.size else None
-                thr = VerdictThresholds(
-                    min_duration_s=thr.min_duration_s,
-                    min_face_valid_frac=thr.min_face_valid_frac,
-                    min_snr=thr.min_snr,
-                    max_agreement_bpm=thr.max_agreement_bpm,
-                    detector_threshold=float(bundle.get("threshold", thr.detector_threshold)),
-                )
         except Exception as exc:  # noqa: BLE001 — never crash the app
-            degraded = True
-            detector_score = None
+            a.warnings.append(f"W_FACESWAP_FAILED: {type(exc).__name__}")
             bundle = None
-            config.setdefault("_detector_error", str(exc))
 
-    analysis = PulseAnalysis(
-        verdict="inconclusive",
-        headline="Inconclusive",
-        detail="",
-        per_roi_hr=per_roi_hr,
-        roi_names=names[: len(per_roi_hr)],
-        agreement_bpm=agreement,
-        face_valid_frac=face_valid_frac,
-        mean_snr=mean_snr,
-        duration_s=duration,
-        n_frames=int(frames.shape[0]),
-        detector_score=detector_score,
-        # The model is installed and loaded (a score may still be absent
-        # when the face was not tracked; see face_ok above).
-        detector_available=bundle is not None,
-        degraded=degraded,
-        roi_waveforms=_waveforms(ppg, fps, band=hr_band),
-        waveform_names=names[: ppg.shape[1]],
-        waveform_band_hz=[float(hr_band[0]), float(hr_band[1])],
+    a.per_roi_hr = per_roi_hr
+    a.roi_names = names[: len(per_roi_hr)]
+    a.agreement_bpm = float(np.std(finite)) if len(finite) > 1 else None
+    a.face_valid_frac = face_valid_frac
+    a.pulse_snr_db = float(np.mean(snrs)) if snrs else None
+    a.pulse_measurable = (
+        a.pulse_snr_db is not None and a.pulse_snr_db >= thr.min_pulse_snr_db
     )
-    if duration > max_seconds:
-        analysis.warnings.append(
-            f"W_TRUNCATED: analysed the first {max_seconds:.0f}s of a "
-            f"{duration:.0f}s clip"
+    a.duration_s = duration
+    a.n_frames = int(frames.shape[0])
+    a.detector_score = detector_score
+    a.detector_available = bundle is not None
+    a.degraded = bundle is None
+    a.roi_waveforms = _waveforms(ppg, fps, band=hr_band)
+    a.waveform_names = names[: ppg.shape[1]]
+    a.waveform_band_hz = [float(hr_band[0]), float(hr_band[1])]
+
+    parts = [f"face tracked in {face_valid_frac:.0%} of frames"]
+    if a.pulse_snr_db is not None:
+        parts.append(
+            f"pulse {'measurable' if a.pulse_measurable else 'not measurable'} "
+            f"({a.pulse_snr_db:+.1f} dB)"
         )
-    verdict_for(analysis, thr)
-    return analysis
-
-
-def _mean_snr(ppg: np.ndarray, fps: float) -> float:
-    """Mean over ROIs of peak/mean in-band power (0.7-14 Hz) — as the cache records it."""
-    n = ppg.shape[0]
-    freqs = np.fft.rfftfreq(n, d=1.0 / fps)
-    mask = (freqs >= 0.7) & (freqs <= 14.0)
-    snrs = []
-    for r in range(ppg.shape[1]):
-        power = np.abs(np.fft.rfft(ppg[:, r] - np.nanmean(ppg[:, r]))) ** 2
-        band = power[mask]
-        if band.size and np.all(np.isfinite(band)):
-            snrs.append(float(band.max() / (band.mean() + 1e-12)))
-    return float(np.mean(snrs)) if snrs else 0.0
+    if detector_score is not None:
+        parts.append(f"face-swap score {detector_score:+.2f}")
+    elif not face_ok:
+        parts.append("face-swap check skipped (face not tracked reliably)")
+    elif bundle is None:
+        parts.append("face-swap check unavailable (no model)")
+    a.layers["pulse"] = "; ".join(parts)
 
 
 def _waveforms(
@@ -338,113 +415,82 @@ def _waveforms(
 
 
 def verdict_for(analysis: PulseAnalysis, thresholds: VerdictThresholds | None = None) -> PulseAnalysis:
-    """Assign the three-state verdict, in place. Returns the analysis.
+    """Fuse the layers into the three-state verdict, in place (docs/11 E1).
 
-    States:
-      * ``real``        — "Pulse consistent: likely real"
-      * ``fake``        — "Pulse inconsistent: pixel-replacement pattern detected"
-      * ``inconclusive``: "Inconclusive: couldn't read a reliable pulse"
+    Order, strongest evidence first:
+      1. Content Credentials declaring AI generation -> ``fake``.
+      2. The whole-frame AI-video detector over its threshold -> ``fake``.
+      3. The strict face-swap score -> ``fake`` ("possible face-swap").
+      4. The AI-video detector ran and nothing fired -> ``real``
+         ("no sign of AI generation found", never "authentic").
+      5. Nothing could decide -> ``inconclusive``, listing why per layer.
 
-    The QC gates come first: without a readable pulse there is nothing to
-    conclude, whatever the detector says.
+    The pulse itself does not decide: on web-quality video it is not
+    measurable for real faces either (docs/11, Phase B result).
     """
     thr = thresholds or DEFAULT_THRESHOLDS
     a = analysis
+    prov = a.provenance or {}
 
-    # ---- QC gates -------------------------------------------------------
-    reasons: list[str] = []
-    if a.duration_s < thr.min_duration_s:
-        reasons.append(
-            f"clip is {a.duration_s:.1f}s: shorter than the {thr.min_duration_s:.0f}s "
-            "minimum needed to resolve a heart rate"
-        )
-    if a.face_valid_frac <= 0.0:
-        reasons.append("no face was tracked in any frame")
-    elif a.face_valid_frac < thr.min_face_valid_frac:
-        reasons.append(
-            f"face tracked in only {a.face_valid_frac:.0%} of frames "
-            f"(need {thr.min_face_valid_frac:.0%})"
-        )
-    if a.mean_snr < thr.min_snr:
-        reasons.append(
-            f"no measurable pulse in the face regions (SNR {a.mean_snr:.1f}, "
-            f"need {thr.min_snr:.0f})"
-        )
-    if a.agreement_bpm is None:
-        reasons.append("could not estimate a heart rate in enough regions")
-
-    if reasons:
-        a.verdict = "inconclusive"
-        a.headline = "Inconclusive: couldn't read a reliable pulse"
-        a.detail = "; ".join(reasons) + "."
-        for r in reasons:
-            if r not in a.warnings:
-                a.warnings.append(f"W_QC: {r}")
-        return a
-
-    # ---- the pulse is readable: use the detector ------------------------
-    if a.detector_score is None:
-        a.verdict = "inconclusive"
-        a.headline = "Inconclusive: no detector model available"
+    if prov.get("ai_declared"):
+        gen = prov.get("generator")
+        a.verdict, a.decided_by = "fake", "provenance"
+        a.headline = "AI-generated: declared by its Content Credentials"
         a.detail = (
-            "The pulse was measured, but the detector model is not installed, "
-            "so no real/fake decision can be made. Drop a trained bundle at "
-            "data/models/detector.joblib (or models/detector.joblib) for the "
-            "full verdict."
+            "The file carries a C2PA manifest whose history declares generation "
+            f"by a trained model{f' ({gen})' if gen else ''}."
         )
-        a.warnings.append("W_NO_DETECTOR")
+        state = prov.get("validation_state")
+        if state not in (None, "Valid", "Trusted"):
+            a.detail += f" The manifest's signature check reads {state!r}, so treat it with care."
         return a
 
-    says_real = a.detector_score >= thr.detector_threshold
-    consistent = (
-        a.agreement_bpm is not None and a.agreement_bpm <= thr.max_agreement_bpm
-    )
-    spread = f"{a.agreement_bpm:.1f} bpm" if a.agreement_bpm is not None else "n/a"
+    if a.ai_label == "ai" and a.ai_score is not None:
+        a.verdict, a.decided_by = "fake", "ai_video"
+        a.headline = "Likely AI-generated"
+        a.detail = (
+            f"The whole-frame detector scores this clip {a.ai_score:+.2f}, above its "
+            f"threshold of {a.ai_threshold:+.2f} (set so that about 5% of real clips "
+            f"cross it). Detector probability: {a.ai_probability:.0%}."
+        )
+        return a
 
-    if says_real:
-        a.verdict = "real"
-        if consistent:
-            a.headline = "Pulse consistent: likely real"
-            a.detail = (
-                f"The face regions agree on one pulse (spread {spread}) and the "
-                f"detector's score ({a.detector_score:+.2f}) sits on the real "
-                f"side of the validated boundary ({thr.detector_threshold:+.2f})."
-            )
-        else:
-            # Honest wording: the detector says real, but the evidence does
-            # not show a consistent pulse. Do not claim agreement that the
-            # measurement contradicts.
-            a.headline = "Likely real: but the face regions disagree on the pulse"
-            a.detail = (
-                f"The detector's score ({a.detector_score:+.2f}) is on the real "
-                f"side of the validated boundary ({thr.detector_threshold:+.2f}), "
-                f"but the regions do not agree on one pulse (spread {spread} > "
-                f"{thr.max_agreement_bpm:.0f} bpm), so the pulse evidence "
-                "itself is weak here. Treat this as a low-confidence 'real'."
-            )
-    else:
-        a.verdict = "fake"
-        if not consistent:
-            a.headline = "Pulse inconsistent: pixel-replacement pattern detected"
-            a.detail = (
-                "The face regions do not agree on one pulse "
-                f"(spread {spread}): consistent with a Deepfakes-family pixel "
-                "replacement, which replaces the pulse inside the face, and "
-                f"the detector's score ({a.detector_score:+.2f}) is on the fake "
-                f"side of the validated boundary ({thr.detector_threshold:+.2f})."
-            )
-        else:
-            # The detector says fake although the regions agree: report the
-            # detector's call without inventing a pulse-inconsistency story.
-            a.headline = "Likely fake: detected without a pulse-inconsistency signature"
-            a.detail = (
-                f"The detector's score ({a.detector_score:+.2f}) is on the fake "
-                f"side of the validated boundary ({thr.detector_threshold:+.2f}), "
-                f"although the regions do agree on one pulse (spread {spread}), "
-                "so this is not the Deepfakes-style signature: it may be "
-                "another manipulation family, which this detector cannot "
-                "distinguish (see the caveat)."
-            )
+    if a.detector_score is not None and a.detector_score <= thr.faceswap_threshold:
+        a.verdict, a.decided_by = "fake", "face_swap"
+        a.headline = "Possible face-swap"
+        a.detail = (
+            f"The face-region consistency score ({a.detector_score:+.2f}) is at or "
+            f"below the strict face-swap threshold ({thr.faceswap_threshold:+.2f}). "
+            "This check is weak: it catches about a quarter of Deepfakes-style "
+            "swaps and flags about 2% of real face videos."
+        )
+        if a.ai_label == "real":
+            a.detail += " The whole-frame AI-video detector did not flag the clip."
+        return a
+
+    if a.ai_label == "real" and a.ai_score is not None:
+        a.verdict, a.decided_by = "real", "ai_video"
+        a.headline = "No sign of AI generation found"
+        swap = (
+            "The face-swap check also passed."
+            if a.detector_score is not None
+            else f"The face-swap check did not run ({a.layers.get('pulse', 'not run')})."
+        )
+        a.detail = (
+            f"The whole-frame detector scores this clip {a.ai_score:+.2f}, below its "
+            f"threshold of {a.ai_threshold:+.2f}. {swap} This is not proof the video "
+            "is authentic: see the caveat."
+        )
+        return a
+
+    a.verdict, a.decided_by = "inconclusive", ""
+    unreadable = "E_UNREADABLE" in a.warnings
+    a.headline = (
+        "Inconclusive: could not read the video"
+        if unreadable
+        else "Inconclusive: no check could reach a decision"
+    )
+    a.detail = "; ".join(f"{k}: {v}" for k, v in a.layers.items()) + "."
     return a
 
 
@@ -571,7 +617,7 @@ def build_demo(
             progress = gr.Progress()
         if not video_path:
             return ("Upload a video first.", "", "", None, CAVEAT)
-        progress(0.1, desc="Decoding video…")
+        progress(0.1, desc="Analysing (AI-video detector, then pulse)…")
         analysis = analyze_video(
             video_path, cfg, model_path=model_path, thresholds=thresholds
         )
@@ -581,18 +627,17 @@ def build_demo(
 
     # Note (gradio 6+): theme/CSS moved from the Blocks constructor to
     # demo.launch(); they are applied in main() from _ui_theme()/UI_CSS.
-    with gr.Blocks(title="TrueBeat: rPPG deepfake check") as demo:
+    with gr.Blocks(title="TrueBeat: AI-video and deepfake check") as demo:
         gr.Markdown(
-            "# TrueBeat: rPPG deepfake check\n"
-            "Upload a short video of a face (10–120 s works best). "
-            "Analysis takes roughly **20 seconds per minute of video** on a "
-            "CPU: a 60 s clip is about a minute of waiting.",
+            "# TrueBeat: AI-video and deepfake check\n"
+            "Upload a video (2–120 s). Every check runs on this machine. "
+            "Expect roughly **10 s plus 20 s per minute of video** on a CPU.",
             elem_id="tb-head",
         )
         with gr.Row():
             with gr.Column():
                 video = gr.Video(
-                    label="Video (10–120 s, visible face)",
+                    label="Video (2–120 s)",
                     sources=["upload"],
                     elem_id="tb-video",
                 )
@@ -633,8 +678,15 @@ def build_demo(
                     "score": a.detector_score,
                     "hr_bpm": float(np.mean(finite_hr)) if finite_hr else None,
                     "region_agreement_bpm": a.agreement_bpm,
-                    "snr": a.mean_snr,
+                    "snr": a.pulse_snr_db,
                     "face_valid_frac": a.face_valid_frac,
+                    "ai_label": a.ai_label,
+                    "ai_probability": a.ai_probability,
+                    "ai_score": a.ai_score,
+                    "ai_threshold": a.ai_threshold,
+                    "decided_by": a.decided_by,
+                    "layers": a.layers,
+                    "provenance": a.provenance,
                     "duration_s": a.duration_s,
                     "per_roi_hr": {
                         n: (float(b) if np.isfinite(b) else None)
@@ -643,7 +695,7 @@ def build_demo(
                     "qc": {
                         "ok": a.verdict != "inconclusive",
                         "face_valid_frac": a.face_valid_frac,
-                        "snr": a.mean_snr,
+                        "snr": a.pulse_snr_db,
                         "duration_s": a.duration_s,
                         "degraded": a.degraded,
                         "warnings": a.warnings,
@@ -668,29 +720,55 @@ def build_demo(
 
 
 def _evidence_text(a: PulseAnalysis) -> str:
+    """Markdown evidence table: one row per layer, then the pulse details."""
+
+    def fmt(v, spec):
+        return "n/a" if v is None else format(v, spec)
+
+    if a.ai_score is not None:
+        ai_text = (
+            f"score {a.ai_score:+.2f} (flags at >= {a.ai_threshold:+.2f}); "
+            f"probability {a.ai_probability:.0%}"
+        )
+    else:
+        ai_text = a.layers.get("ai_video", "not run")
+    prov = a.provenance or {}
+    prov_text = a.layers.get("provenance", "not run")
+    if prov.get("generator"):
+        prov_text += f" ({prov['generator']})"
+    if a.detector_score is not None:
+        swap_text = f"score {a.detector_score:+.2f} (flags at <= {DEFAULT_THRESHOLDS.faceswap_threshold:+.2f})"
+    elif a.detector_available:
+        swap_text = "n/a (not computed: face not tracked reliably)"
+    elif "pulse" in a.layers and a.layers["pulse"].startswith("skipped"):
+        swap_text = "n/a (" + a.layers["pulse"] + ")"
+    else:
+        swap_text = "n/a (no model: degraded mode)"
     hr_text = ", ".join(
-        f"{n}: {b:.1f} bpm"
-        for n, b in zip(a.roi_names, a.per_roi_hr)
-        if np.isfinite(b)
+        f"{n}: {b:.1f} bpm" for n, b in zip(a.roi_names, a.per_roi_hr) if np.isfinite(b)
     ) or "n/a"
-    agree_text = (
-        f"{a.agreement_bpm:.1f} bpm spread" if a.agreement_bpm is not None else "n/a"
-    )
+    if a.pulse_snr_db is not None and not a.pulse_measurable:
+        hr_text += " (not reliable: pulse not measurable)"
+    if a.pulse_snr_db is not None:
+        pulse_text = (
+            f"{'measurable' if a.pulse_measurable else 'not measurable'} "
+            f"(SNR {a.pulse_snr_db:+.1f} dB)"
+        )
+    else:
+        pulse_text = "n/a"
     rows = [
         "| evidence | value |",
         "|---------|-------|",
+        f"| AI-video detector | {ai_text} |",
+        f"| Content Credentials | {prov_text} |",
+        f"| face-swap check | {swap_text} |",
+        f"| pulse | {pulse_text} |",
         f"| per-region heart rate | {hr_text} |",
-        f"| inter-region agreement | {agree_text} |",
-        f"| face_valid_frac | {a.face_valid_frac:.2f} |",
-        f"| in-band SNR | {a.mean_snr:.1f} |",
+        f"| region agreement | {fmt(a.agreement_bpm, '.1f')} bpm spread |",
+        f"| face tracked | {a.face_valid_frac:.0%} of frames |",
         f"| clip length | {a.duration_s:.1f} s |",
+        f"| decided by | {a.decided_by or 'nothing (no layer could decide)'} |",
     ]
-    if a.detector_score is not None:
-        rows.append(f"| detector score | {a.detector_score:+.3f} |")
-    elif a.detector_available:
-        rows.append("| detector score | n/a (not computed: face not tracked reliably) |")
-    else:
-        rows.append("| detector score | n/a (no model: degraded mode) |")
     if a.warnings:
         rows.append(f"| warnings | {'; '.join(a.warnings)} |")
     return "\n".join(rows)
