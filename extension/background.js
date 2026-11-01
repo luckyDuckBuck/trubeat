@@ -173,14 +173,24 @@ function probeMainVideo() {
  */
 function planCaptureSeconds(configured, info) {
   const want = Math.max(MIN_CAPTURE_SECONDS, Math.round(Number(configured) || 20));
+  if (info && info.paused) {
+    return {
+      seconds: 0,
+      note: "The video is paused. Press play, then check again.",
+    };
+  }
   if (!info || !Number.isFinite(info.duration) || info.duration <= 0) {
     return { seconds: want, note: "" }; // live stream or unknown: as configured
   }
-  const left = info.loop ? info.duration : info.duration - (info.currentTime || 0);
+  // Record only until the clip ends, looping or not: crossing a loop point
+  // splices two moments of the clip together (a fake "cut").
+  const left = info.duration - (info.currentTime || 0);
   if (left < MIN_CAPTURE_SECONDS) {
     return {
       seconds: 0,
-      note: "The video is almost over. Rewind it, press play and check again.",
+      note: info.loop
+        ? "The clip is about to loop. Check again right after it restarts."
+        : "The video is almost over. Rewind it, press play and check again.",
     };
   }
   if (left < want) {

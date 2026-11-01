@@ -62,19 +62,32 @@ def merged_config(config: dict | None) -> dict:
 # --------------------------------------------------------------- sampling ---
 
 
-def _target_times(duration_s: float, cfg: dict) -> list[np.ndarray]:
-    """Start-aligned sample times (s) for up to max_segments segments."""
+def _target_times(
+    duration_s: float, cfg: dict, last_frame_s: float | None = None
+) -> list[np.ndarray]:
+    """Sample times (s) for up to max_segments segments.
+
+    Every target lies at or before ``last_frame_s`` (the timestamp of the
+    last decoded frame; defaults to ``duration_s``), and segment starts sit
+    on the 1/sample_fps grid the reservoir keeps frames on, so each target
+    maps to its own decoded frame. (Targets up to ``duration_s``, one frame
+    period past the last frame, repeated a frame in the last segment.)
+    """
     step = 1.0 / float(cfg["sample_fps"])
     n = int(cfg["n_frames"])
     span = step * (n - 1)
-    if duration_s < max(float(cfg["min_duration_s"]), span):
+    end = duration_s if last_frame_s is None else last_frame_s
+    if duration_s < float(cfg["min_duration_s"]) or end < span - 1e-6:
         return []
     max_seg = int(cfg["max_segments"])
-    free = duration_s - span
-    # Evenly spread segment starts over the clip, never overlapping more
-    # than needed; a clip with room for one segment gets one.
+    free = max(0.0, end - span)
+    # Evenly spread segment starts over the clip; a clip with room for one
+    # segment gets one.
     n_seg = max(1, min(max_seg, int(free // span) + 1))
-    starts = [0.0] if n_seg == 1 else list(np.linspace(0.0, free, n_seg))
+    raw = [0.0] if n_seg == 1 else np.linspace(0.0, free, n_seg)
+    # Floor onto the grid: on-grid and never past `free` (so never past the
+    # last frame).
+    starts = sorted({np.floor(float(x) / step + 1e-9) * step for x in raw})
     return [s + step * np.arange(n) for s in starts]
 
 
@@ -93,8 +106,13 @@ def _prep(frame_bgr: np.ndarray, size: int) -> np.ndarray:
 def _decode_reservoir(
     p: Path, cfg: dict, index_time: bool
 ) -> tuple[list[float], dict[int, np.ndarray], dict]:
-    """One decode pass. Keeps one prepared frame per 1/sample_fps interval
+    """One decode pass. Keeps one prepared frame per 1/sample_fps grid point
     (a superset of every segment's frames) plus every frame's timestamp.
+
+    ``kept`` maps grid index k (time k / sample_fps after the first frame)
+    to the first frame at or after that time. A grid point a low-fps source
+    skips over has no entry; the sampler then reuses the previous frame,
+    which is what that source actually showed at that time.
 
     Timestamps come from CAP_PROP_POS_MSEC (the PTS of the frame just
     grabbed), or from frame index / metadata fps when ``index_time``.
@@ -116,22 +134,23 @@ def _decode_reservoir(
         interval_ms = 1000.0 / float(cfg["sample_fps"])
         stamps: list[float] = []
         kept: dict[int, np.ndarray] = {}
-        next_ms: float | None = None
+        t0: float | None = None
+        k = 0  # next grid index to fill
         idx = 0
         while cap.grab():
             if index_time:
                 ts = idx * 1000.0 / fps_meta
             else:
                 ts = float(cap.get(cv2.CAP_PROP_POS_MSEC))
-            if next_ms is None:
-                next_ms = ts  # streams may start at a non-zero PTS
+            if t0 is None:
+                t0 = ts  # streams may start at a non-zero PTS
             stamps.append(ts)
-            if ts >= next_ms - 1e-6:
+            if ts - t0 >= k * interval_ms - 1e-6:
                 ok, frame = cap.retrieve()
                 if ok:
-                    kept[idx] = _prep(frame, size)
-                    while next_ms <= ts + 1e-6:
-                        next_ms += interval_ms
+                    kept[k] = _prep(frame, size)
+                    # skip grid points this frame already passed (low fps)
+                    k = int(np.floor((ts - t0) / interval_ms + 1e-9)) + 1
             idx += 1
     finally:
         cap.release()
@@ -167,18 +186,23 @@ def sample_segments(path: str | Path, config: dict | None = None) -> tuple[np.nd
         duration_s = float(rel_s[-1] * len(rel_s) / (len(rel_s) - 1))
     else:
         duration_s = 0.0
-    times = _target_times(duration_s, cfg)
+    times = _target_times(duration_s, cfg, last_frame_s=float(rel_s[-1]) if len(rel_s) else 0.0)
     if not times:
         raise ShortVideo(
             f"duration={duration_s:.2f}s is shorter than one "
             f"{cfg['n_frames']}-frame segment at {cfg['sample_fps']} fps"
         )
-    kept_idx = np.array(sorted(kept))
-    kept_t = rel_s[kept_idx]
+    grid = sorted(kept)
+    step = 1.0 / float(cfg["sample_fps"])
     segments = []
     for seg_t in times:
-        pick = [int(kept_idx[np.argmin(np.abs(kept_t - t))]) for t in seg_t]
-        segments.append(np.stack([kept[i] for i in pick]))
+        frames_seg = []
+        for t in seg_t:
+            g = round(t / step)
+            # the frame kept for grid point g, else the latest one before it
+            j = int(np.searchsorted(grid, g, side="right")) - 1
+            frames_seg.append(kept[grid[max(j, 0)]])
+        segments.append(np.stack(frames_seg))
     meta = {
         "duration_s": duration_s,
         "n_decoded": len(stamps),
@@ -387,7 +411,11 @@ def segment_embeddings(
 class AIGenResult:
     """The whole-frame detector's answer for one video."""
 
-    p_ai: float | None  # calibrated probability the clip is AI-generated
+    # Share of the bundle's reference real clips (out-of-fold, never trained
+    # on) that score below this clip. The threshold is the 1 - target_fpr
+    # quantile of the same scores, so label "ai" <=> real_percentile above
+    # 1 - target_fpr: the number shown can never contradict the label.
+    real_percentile: float | None
     score: float | None  # raw decision value (positive = AI-generated)
     threshold: float | None
     label: str  # "ai" | "real" | "unknown"
@@ -507,11 +535,12 @@ def analyze(
                                warnings=warnings + [f"{exc.code}: {exc}"])
     scores = segment_scores(seg_emb, bundle)
     score = float(np.mean(scores))
-    p_ai = float(1.0 / (1.0 + np.exp(-score)))  # logistic link of the mean logit
+    ref = bundle.get("real_reference_scores")
+    pct = float(np.mean(np.asarray(ref) < score)) if ref is not None and len(ref) else None
     if meta.get("n_segments", 0) < 2:
         warnings.append("W_SHORT_CLIP: one 2 s segment analysed; lower confidence")
     return AIGenResult(
-        p_ai=p_ai,
+        real_percentile=pct,
         score=score,
         threshold=thr,
         label="ai" if score >= thr else "real",

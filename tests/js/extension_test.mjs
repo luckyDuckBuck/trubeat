@@ -355,8 +355,12 @@ section("2b. background.js — capture length matches the clip");
        "live stream (no duration): record as configured");
     eq(plan(20, { duration: 8, currentTime: 0, loop: false }), 8,
        "an 8 s clip records 8 s, not 20 across its end");
-    eq(plan(20, { duration: 8, currentTime: 5, loop: true }), 8,
-       "a looping 8 s clip records one loop, not the seam");
+    eq(plan(20, { duration: 8, currentTime: 2, loop: true }), 6,
+       "a looping 8 s clip at 2 s records the 6 s left, not across the loop point");
+    eq(plan(20, { duration: 8, currentTime: 6, loop: true }), 0,
+       "a looping clip about to restart: no capture, a message instead");
+    eq(plan(20, { duration: 30, currentTime: 0, loop: false, paused: true }), 0,
+       "a paused video is not recorded (it would be 20 s of one frame)");
     eq(plan(20, { duration: 60, currentTime: 50, loop: false }), 10,
        "records only what is left of the clip");
     eq(plan(20, { duration: 60, currentTime: 59, loop: false }), 0,

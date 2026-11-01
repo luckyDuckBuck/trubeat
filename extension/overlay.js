@@ -150,11 +150,13 @@
       dot.style.background = style.accent;
       title.textContent = "TrueBeat";
       const rows = [];
-      if (r.ai_probability != null) {
+      if (r.ai_score != null) {
         rows.push([
           "AI-video detector",
-          Math.round(r.ai_probability * 100) + "% (score " + num(r.ai_score, 2) +
-            ", flags at " + num(r.ai_threshold, 2) + ")",
+          "score " + num(r.ai_score, 2) + " (flags at " + num(r.ai_threshold, 2) + ")" +
+            (r.ai_real_percentile != null
+              ? "; above " + Math.round(r.ai_real_percentile * 100) + "% of real clips"
+              : ""),
         ]);
       }
       if (r.decided_by) {

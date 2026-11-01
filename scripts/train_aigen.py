@@ -169,6 +169,8 @@ def featurize_one(path: str) -> tuple[str, dict | None, np.ndarray | None, str]:
 
 
 def featurize_all(paths: list[str], cfg: dict, workers: int) -> pd.DataFrame:
+    if not paths:
+        return pd.DataFrame({"feat_path": pd.Series(dtype=str), "error": pd.Series(dtype=str)})
     wcfg = dict(cfg)
     wcfg["torch_threads"] = max(1, int(cfg.get("train_threads", cfg["torch_threads"])) // workers)
     wcfg["max_segments"] = int(cfg.get("train_segments", cfg["max_segments"]))
@@ -230,7 +232,9 @@ def base_family(generator: str) -> str:
         g = g.removesuffix(suffix)
     aliases = {"open-sora": "opensora", "wan2.1": "wan", "wanx": "wan",
                "cogvideox1.5": "cogvideox", "ltxvideo": "ltx", "gen2": "runway",
-               "gen3": "runway", "gen4.5": "runway"}
+               "gen3": "runway", "gen4.5": "runway",
+               # built on another base model: held out with it
+               "causvid": "wan", "accvideo": "hunyuanvideo", "repvideo": "cogvideox"}
     return aliases.get(g, g)
 
 
@@ -321,9 +325,15 @@ def main() -> None:
     pool_rows = rows[rows.role == "pool"]
     pool_ai = pool_rows[pool_rows.label == "ai"]
     pool_real = pool_rows[pool_rows.label == "real"]
-    paired = pool_real.split_group.isin(set(pool_ai.split_group))
-    pool_real = pd.concat([pool_real[paired], pool_real[~paired].sample(frac=1, random_state=7)])
-    pool_real = pool_real.head(int(args.max_pool_real))
+    # FF++ talking-head reals are the domain closest to the user's videos:
+    # always kept. The cap applies to the AIGVDBench reals, content-paired
+    # ones first (an earlier version capped all reals together and dropped
+    # every FF++ clip, because 1,501 paired reals came first).
+    ff_real = pool_real[pool_real.source == "ffpp_original"]
+    av_real = pool_real[pool_real.source != "ffpp_original"]
+    paired = av_real.split_group.isin(set(pool_ai.split_group))
+    av_real = pd.concat([av_real[paired], av_real[~paired].sample(frac=1, random_state=7)])
+    pool_real = pd.concat([ff_real, av_real.head(int(args.max_pool_real))])
     ext_rows = cap_rows(rows[rows.role == "external"], int(args.external_per_group))
     rows = pd.concat([pool_ai, pool_real, ext_rows], ignore_index=True)
     log(f"rows: {len(rows)}\n{rows.groupby(['role', 'source', 'label']).size().to_string()}")
@@ -366,10 +376,21 @@ def main() -> None:
     pool_auc = safe_auc(y_pool, oof)
 
     final = make_model(C).fit(pool[cols].to_numpy(), pool.label.to_numpy())
+    bundle_cfg = {k: v for k, v in cfg.items() if k not in ("cache_dir",)}
+    # The shipped path must be the evaluated path: inference scores exactly
+    # the segments training and evaluation used (docs/11 review #4).
+    bundle_cfg["max_segments"] = int(cfg.get("train_segments", 1))
     bundle = {
         "model": final, "feature_set": fs, "feature_columns": cols, "threshold": thr,
-        "config": {k: v for k, v in cfg.items() if k not in ("cache_dir",)},
-        "config_hash": cfg_hash(cfg), "trained_on": "AIGVDBench subset + FF++ c23 originals (train/val)",
+        # Out-of-fold scores of the pool's real clips: the app reports where a
+        # clip falls among them ("scores higher than X% of real clips"), which
+        # is consistent with the threshold by construction (the threshold is
+        # their 1 - target_fpr quantile). Replaces an uncalibrated sigmoid.
+        "real_reference_scores": np.sort(oof[y_pool == 0]).astype(np.float32),
+        "config": bundle_cfg,
+        "config_hash": cfg_hash(cfg),
+        "trained_on": (f"AIGVDBench subset ({int((pool.source == 'aigvdbench').sum())} clips) + "
+                       f"FF++ c23 originals train/val ({int((pool.source == 'ffpp_original').sum())} reals)"),
         "selection": "macro leave-one-generator-out AUC on the pool",
         "created": time.strftime("%Y-%m-%d %H:%M"),
     }
@@ -412,9 +433,11 @@ def cap_rows(df: pd.DataFrame, per_group: int, seed: int = 7,
     """At most `per_group` rows per (source, generator, label), seeded."""
     if per_group <= 0:
         return df
-    return (df.groupby(list(by), group_keys=False)
-              .apply(lambda g: g.sample(min(len(g), per_group), random_state=seed))
-              .reset_index(drop=True))
+    # shuffle, then the first `per_group` rows of each group. groupby().apply
+    # drops the grouping columns under pandas 3 (it returned only `path`);
+    # head() keeps every column on every pandas version.
+    shuffled = df.sample(frac=1.0, random_state=seed)
+    return shuffled.groupby(list(by), sort=False, dropna=False).head(per_group).reset_index(drop=True)
 
 
 def compact_eval(df: pd.DataFrame) -> dict:

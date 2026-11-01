@@ -103,7 +103,7 @@ class PulseAnalysis:
     per_roi_hr: list[float] = field(default_factory=list)
     roi_names: list[str] = field(default_factory=list)
     agreement_bpm: float | None = None
-    face_valid_frac: float = 0.0
+    face_valid_frac: float | None = None  # None: the pulse layer did not run
     pulse_snr_db: float | None = None  # mean over regions (hr.pulse_snr_db)
     pulse_measurable: bool | None = None
     duration_s: float = 0.0
@@ -112,13 +112,15 @@ class PulseAnalysis:
     detector_available: bool = False
     degraded: bool = False  # no G2 model -> pulse/HR analyzer only
     ai_label: str = "unknown"  # "ai" | "real" | "unknown"
-    ai_probability: float | None = None  # detector's P(AI-generated)
+    # share of the detector's reference real clips scoring below this clip
+    ai_real_percentile: float | None = None
     ai_score: float | None = None  # decision value (positive = AI)
     ai_threshold: float | None = None
     ai_available: bool = False
     provenance: dict = field(default_factory=dict)
     layers: dict = field(default_factory=dict)  # layer -> what happened
     decided_by: str = ""  # "provenance" | "ai_video" | "face_swap" | ""
+    faceswap_threshold: float | None = None  # the threshold actually applied
     warnings: list[str] = field(default_factory=list)
     roi_waveforms: list[list[float]] = field(default_factory=list)  # 3 x T
     waveform_names: list[str] = field(default_factory=list)
@@ -251,7 +253,7 @@ def _ai_video_layer(a: PulseAnalysis, path: Path, aigen_path) -> None:
         return
     a.ai_available = True
     a.ai_label = res.label
-    a.ai_probability = res.p_ai
+    a.ai_real_percentile = res.real_percentile
     a.ai_score = res.score
     a.ai_threshold = res.threshold
     a.warnings += [w for w in res.warnings if w not in a.warnings]
@@ -311,12 +313,18 @@ def _pulse_layer(
         method = str(config.get("method", "green"))
         win_s = float(config.get("window_s", 10.0))
 
-    landmarks, valid = face.track_landmarks(frames, fps)
-    face_valid_frac = float(np.mean(valid)) if len(valid) else 0.0
-    traces = roi.extract_roi_means(
-        frames, landmarks, valid, config.get("roi_defs", roi.ROI_DEFS_P1)
-    )
-    ppg = signal.extract_ppg(traces, fps, method=method)
+    try:
+        landmarks, valid = face.track_landmarks(frames, fps)
+        face_valid_frac = float(np.mean(valid)) if len(valid) else 0.0
+        traces = roi.extract_roi_means(
+            frames, landmarks, valid, config.get("roi_defs", roi.ROI_DEFS_P1)
+        )
+        ppg = signal.extract_ppg(traces, fps, method=method)
+    except Exception as exc:  # noqa: BLE001 — one layer failing must not lose the others
+        a.layers["pulse"] = f"failed: {type(exc).__name__}: {exc}"
+        a.warnings.append("W_PULSE_FAILED")
+        a.duration_s = a.duration_s or duration
+        return
     names = _roi_names(config)
 
     # Heart rate and pulse SNR on the band-passed signal (docs/11 B1a/B2):
@@ -339,6 +347,7 @@ def _pulse_layer(
     # G2 face-swap score: only on a tracked face (an untracked face gives
     # zero-filled traces, docs/11 F10).
     detector_score: float | None = None
+    swap_note = ""
     face_ok = face_valid_frac >= thr.min_face_valid_frac
     if bundle is not None and face_ok:
         try:
@@ -349,9 +358,11 @@ def _pulse_layer(
             if len(feat) and all(c in feat.columns for c in cols):
                 dec = np.asarray(bundle["model"].decision_function(feat[cols]), dtype=float)
                 detector_score = float(np.mean(dec)) if dec.size else None
+            else:
+                swap_note = "face-swap check skipped (no complete analysis window)"
         except Exception as exc:  # noqa: BLE001 — never crash the app
             a.warnings.append(f"W_FACESWAP_FAILED: {type(exc).__name__}")
-            bundle = None
+            swap_note = f"face-swap check failed ({type(exc).__name__})"
 
     a.per_roi_hr = per_roi_hr
     a.roi_names = names[: len(per_roi_hr)]
@@ -364,6 +375,7 @@ def _pulse_layer(
     a.duration_s = duration
     a.n_frames = int(frames.shape[0])
     a.detector_score = detector_score
+    a.faceswap_threshold = thr.faceswap_threshold
     a.detector_available = bundle is not None
     a.degraded = bundle is None
     a.roi_waveforms = _waveforms(ppg, fps, band=hr_band)
@@ -378,6 +390,8 @@ def _pulse_layer(
         )
     if detector_score is not None:
         parts.append(f"face-swap score {detector_score:+.2f}")
+    elif swap_note:
+        parts.append(swap_note)
     elif not face_ok:
         parts.append("face-swap check skipped (face not tracked reliably)")
     elif bundle is None:
@@ -451,8 +465,13 @@ def verdict_for(analysis: PulseAnalysis, thresholds: VerdictThresholds | None = 
         a.detail = (
             f"The whole-frame detector scores this clip {a.ai_score:+.2f}, above its "
             f"threshold of {a.ai_threshold:+.2f} (set so that about 5% of real clips "
-            f"cross it). Detector probability: {a.ai_probability:.0%}."
+            "cross it)."
         )
+        if a.ai_real_percentile is not None:
+            a.detail += (
+                f" That is higher than {a.ai_real_percentile:.0%} of the real "
+                "validation clips."
+            )
         return a
 
     if a.detector_score is not None and a.detector_score <= thr.faceswap_threshold:
@@ -681,7 +700,7 @@ def build_demo(
                     "snr": a.pulse_snr_db,
                     "face_valid_frac": a.face_valid_frac,
                     "ai_label": a.ai_label,
-                    "ai_probability": a.ai_probability,
+                    "ai_real_percentile": a.ai_real_percentile,
                     "ai_score": a.ai_score,
                     "ai_threshold": a.ai_threshold,
                     "decided_by": a.decided_by,
@@ -726,22 +745,26 @@ def _evidence_text(a: PulseAnalysis) -> str:
         return "n/a" if v is None else format(v, spec)
 
     if a.ai_score is not None:
-        ai_text = (
-            f"score {a.ai_score:+.2f} (flags at >= {a.ai_threshold:+.2f}); "
-            f"probability {a.ai_probability:.0%}"
-        )
+        ai_text = f"score {a.ai_score:+.2f} (flags at >= {a.ai_threshold:+.2f})"
+        if a.ai_real_percentile is not None:
+            ai_text += f"; higher than {a.ai_real_percentile:.0%} of real validation clips"
     else:
         ai_text = a.layers.get("ai_video", "not run")
     prov = a.provenance or {}
     prov_text = a.layers.get("provenance", "not run")
     if prov.get("generator"):
         prov_text += f" ({prov['generator']})"
+    pulse_layer = a.layers.get("pulse", "")
     if a.detector_score is not None:
-        swap_text = f"score {a.detector_score:+.2f} (flags at <= {DEFAULT_THRESHOLDS.faceswap_threshold:+.2f})"
+        swap_thr = (a.faceswap_threshold if a.faceswap_threshold is not None
+                    else DEFAULT_THRESHOLDS.faceswap_threshold)
+        swap_text = f"score {a.detector_score:+.2f} (flags at <= {swap_thr:+.2f})"
+    elif pulse_layer.startswith(("skipped", "failed")):
+        swap_text = "n/a (" + pulse_layer + ")"
+    elif "face-swap check" in pulse_layer:
+        swap_text = "n/a (" + pulse_layer.split("; ")[-1] + ")"
     elif a.detector_available:
         swap_text = "n/a (not computed: face not tracked reliably)"
-    elif "pulse" in a.layers and a.layers["pulse"].startswith("skipped"):
-        swap_text = "n/a (" + a.layers["pulse"] + ")"
     else:
         swap_text = "n/a (no model: degraded mode)"
     hr_text = ", ".join(
@@ -765,7 +788,8 @@ def _evidence_text(a: PulseAnalysis) -> str:
         f"| pulse | {pulse_text} |",
         f"| per-region heart rate | {hr_text} |",
         f"| region agreement | {fmt(a.agreement_bpm, '.1f')} bpm spread |",
-        f"| face tracked | {a.face_valid_frac:.0%} of frames |",
+        (f"| face tracked | {a.face_valid_frac:.0%} of frames |"
+         if a.face_valid_frac is not None else "| face tracked | not measured |"),
         f"| clip length | {a.duration_s:.1f} s |",
         f"| decided by | {a.decided_by or 'nothing (no layer could decide)'} |",
     ]

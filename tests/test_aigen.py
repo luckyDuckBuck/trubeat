@@ -81,18 +81,40 @@ def test_feature_vector_sets():
 # ----------------------------------------------------------- sampling -------
 
 
-def test_target_times_fit_inside_the_clip():
+def test_target_times_end_at_the_last_frame_on_the_sampling_grid():
     cfg = aigen.merged_config({})
-    span = (cfg["n_frames"] - 1) / cfg["sample_fps"]
-    for duration in (2.0, 5.0, 8.0, 30.0):
-        segs = aigen._target_times(duration, cfg)
+    step = 1.0 / cfg["sample_fps"]
+    span = (cfg["n_frames"] - 1) * step
+    for duration, fps in ((2.0, 8.0), (5.0, 24.0), (8.0, 30.0), (30.0, 25.0)):
+        last = duration - 1.0 / fps  # timestamp of the last decoded frame
+        segs = aigen._target_times(duration, cfg, last_frame_s=last)
         assert 1 <= len(segs) <= cfg["max_segments"]
         for seg in segs:
             assert len(seg) == cfg["n_frames"]
-            assert seg[0] >= 0.0 and seg[-1] <= duration + 1e-9
-            assert np.allclose(np.diff(seg), 1.0 / cfg["sample_fps"])
+            assert seg[0] >= 0.0 and seg[-1] <= last + 1e-6  # never past the last frame
+            assert np.allclose(np.diff(seg), step)
             assert seg[-1] - seg[0] == pytest.approx(span)
+            assert seg[0] / step == pytest.approx(round(seg[0] / step))  # on the grid
     assert aigen._target_times(1.0, cfg) == []
+
+
+def test_no_segment_repeats_a_frame(tmp_path):
+    """Review finding #3: the last of several segments repeated its final
+    frame (targets ran one frame period past the last frame). Encode the
+    frame index in brightness and check every sampled frame is distinct."""
+    import cv2
+
+    path = tmp_path / "counter.mp4"
+    fps, n = 30.0, 300  # 10 s -> 3 segments
+    vw = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (64, 64))
+    for i in range(n):
+        vw.write(np.full((64, 64, 3), i % 250, dtype=np.uint8))
+    vw.release()
+    frames, meta = aigen.sample_segments(path, {"img_size": 32, "max_segments": 3})
+    assert meta["n_segments"] == 3
+    for seg in frames:
+        levels = seg.reshape(seg.shape[0], -1).mean(axis=1)
+        assert np.all(np.abs(np.diff(levels)) > 1.0), levels
 
 
 @pytest.mark.parametrize("fps", [24.0, 30.0])
@@ -150,24 +172,30 @@ def _tiny_bundle(feature_set="geometry"):
     X = np.vstack([rng.normal(0, 1, (20, d)), rng.normal(1, 1, (20, d))])
     y = np.array(["real"] * 20 + ["ai"] * 20)
     model = make_pipeline(StandardScaler(), LogisticRegression()).fit(X, y)
-    return {"model": model, "feature_set": feature_set, "threshold": 0.0,
-            "config": {"img_size": 32, "cache_dir": None}}
+    s = model.decision_function(X[:20])
+    ref = np.sort(s if list(model.classes_)[1] == "ai" else -s)
+    return {"model": model, "feature_set": feature_set,
+            "threshold": float(np.quantile(ref, 0.95)), "real_reference_scores": ref,
+            "config": {"img_size": 32, "cache_dir": None, "max_segments": 1}}
 
 
 def test_analyze_returns_a_scored_result(tmp_path):
     p = synth.write_pulse_video(tmp_path / "v.mp4", fps=30.0, duration_s=5.0)
     res = aigen.analyze(p, _tiny_bundle(), embedder=_StubEmbedder())
     assert res.label in ("ai", "real")
-    assert 0.0 <= res.p_ai <= 1.0
-    assert res.n_segments >= 1
-    # positive score <=> p_ai above one half (score oriented so + = AI)
-    assert (res.score > 0) == (res.p_ai > 0.5)
+    assert 0.0 <= res.real_percentile <= 1.0
+    assert res.n_segments == 1  # the bundle's segment count, as evaluated
+    # the percentile shown can never contradict the label (review #5)
+    if res.label == "ai":
+        assert res.real_percentile >= 0.9
+    else:
+        assert res.real_percentile <= 0.96
 
 
 def test_analyze_short_clip_is_unknown_not_a_crash(tmp_path):
     p = synth.write_pulse_video(tmp_path / "s.mp4", fps=30.0, duration_s=1.0)
     res = aigen.analyze(p, _tiny_bundle(), embedder=_StubEmbedder())
-    assert res.label == "unknown" and res.p_ai is None
+    assert res.label == "unknown" and res.real_percentile is None
     assert any("E_SHORT_VIDEO" in w for w in res.warnings)
 
 

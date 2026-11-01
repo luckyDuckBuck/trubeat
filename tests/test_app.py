@@ -42,7 +42,7 @@ def _analysis(**kw) -> PulseAnalysis:
         "detector_available": True,
         "degraded": False,
         "ai_label": "real",
-        "ai_probability": 0.2,
+        "ai_real_percentile": 0.2,
         "ai_score": -1.0,
         "ai_threshold": 0.4,
         "ai_available": True,
@@ -67,10 +67,11 @@ def test_nothing_fires_means_no_sign_of_ai_never_authentic():
 
 
 def test_ai_detector_over_threshold_is_fake():
-    a = verdict_for(_analysis(ai_label="ai", ai_score=1.2, ai_probability=0.77), THR)
+    a = verdict_for(_analysis(ai_label="ai", ai_score=1.2, ai_real_percentile=0.99), THR)
     assert a.verdict == "fake" and a.decided_by == "ai_video"
     assert a.headline == "Likely AI-generated"
-    assert "+1.20" in a.detail and "+0.40" in a.detail and "77%" in a.detail
+    assert "+1.20" in a.detail and "+0.40" in a.detail
+    assert "higher than 99% of the real validation clips" in a.detail
 
 
 def test_provenance_declaration_outranks_the_detectors():
@@ -104,7 +105,7 @@ def test_faceswap_boundary_is_inclusive():
 
 
 def test_ai_detector_outranks_the_faceswap_check():
-    a = verdict_for(_analysis(ai_label="ai", ai_score=1.0, ai_probability=0.7,
+    a = verdict_for(_analysis(ai_label="ai", ai_score=1.0, ai_real_percentile=0.97,
                               detector_score=-5.0), THR)
     assert a.decided_by == "ai_video"
 
@@ -283,7 +284,8 @@ def test_evidence_table_explains_a_missing_score():
     """The face-swap row says *why* there is no score."""
     with_score = app_mod._evidence_text(_analysis(detector_score=-0.5))
     assert "| face-swap check | score -0.50 (flags at <=" in with_score
-    assert "| AI-video detector | score -1.00 (flags at >= +0.40); probability 20% |" in with_score
+    assert ("| AI-video detector | score -1.00 (flags at >= +0.40); "
+            "higher than 20% of real validation clips |") in with_score
     assert "(not reliable: pulse not measurable)" in with_score
     no_face = app_mod._evidence_text(
         _analysis(detector_score=None, detector_available=True, face_valid_frac=0.0)
@@ -331,3 +333,38 @@ def test_plot_title_names_the_applied_band_and_is_legible():
     for text in (ax.title, ax.xaxis.label, ax.yaxis.label):
         assert to_hex(text.get_color()) != bg
         assert to_hex(text.get_color()).lower() == "#f4f0e8"
+
+
+def test_evidence_uses_the_threshold_actually_applied():
+    """Review #9: the table printed DEFAULT_THRESHOLDS, not the one used."""
+    txt = app_mod._evidence_text(_analysis(detector_score=-0.7, faceswap_threshold=-0.9))
+    assert "(flags at <= -0.90)" in txt
+
+
+def test_face_tracking_not_measured_is_not_zero():
+    """Review #8: a skipped pulse layer must not report 0% face visibility."""
+    a = _analysis(face_valid_frac=None, detector_score=None,
+                  layers={"ai_video": "ran", "pulse": "skipped: clip shorter than the 10 s"})
+    txt = app_mod._evidence_text(verdict_for(a, THR))
+    assert "| face tracked | not measured |" in txt
+    assert "0% of frames" not in txt
+
+
+def test_a_failing_pulse_layer_keeps_the_other_layers(tmp_path, monkeypatch):
+    """Review #6: an exception inside face tracking used to raise out of
+    analyze_video and discard the provenance and AI-video results."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from test_aigen import _StubEmbedder, _tiny_bundle
+
+    bundle = _tiny_bundle()
+    monkeypatch.setattr(app_mod, "load_aigen", lambda path=None: (bundle, _StubEmbedder()))
+
+    def boom(*_a, **_k):
+        raise RuntimeError("landmarker model missing")
+
+    monkeypatch.setattr(app_mod.face, "track_landmarks", boom)
+    p = synth.write_pulse_video(tmp_path / "v.mp4", fps=30.0, duration_s=11.0)
+    a = app_mod.analyze_video(p, config={"method": "green"})
+    assert a.layers["pulse"].startswith("failed: RuntimeError")
+    assert a.ai_available and a.decided_by == "ai_video"
+    assert "W_PULSE_FAILED" in a.warnings
