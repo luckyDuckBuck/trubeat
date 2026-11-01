@@ -29,8 +29,9 @@
   };
 
   const STANDING_CAVEAT =
-    "Checks for AI-generated video (trained on 31 generators; it misses some " +
-    "new ones and flags a small share of real videos) and, weakly, for " +
+    "Checks for AI-generated video (trained on 26 generators; in tests it " +
+    "caught about 4 in 5 clips from 2024-era tools, about half from the " +
+    "newest, and wrongly flagged about 6% of real videos) and, weakly, for " +
     "face-swaps. Blind to reenactment fakes (Face2Face, NeuralTextures). " +
     "'No sign of AI generation' is not proof a video is real.";
 

@@ -46,11 +46,16 @@ DEFAULT_MODEL_PATH = None
 
 # Always-visible honesty caveat: the measured operating envelope of each
 # layer (reports/aigen_detector.md, reports/g2_detector.md, docs/11).
+# Numbers: reports/aigen_detector.md (2026-11-01, external GenBuster-Bench
+# and FF++ c23 test clips, never used for training or the threshold).
 CAVEAT = (
-    "Checks for fully AI-generated video with a whole-frame detector (trained "
-    "on 31 generators; it misses some new ones and flags a small share of real "
-    "videos, see reports/aigen_detector.md), reads C2PA Content Credentials "
-    "when present, and runs a weak face-swap check (catches about a quarter of "
+    "Checks for fully AI-generated video with a whole-frame detector trained "
+    "on 26 generators. On held-out test sets it caught about 4 in 5 clips from "
+    "2024-era tools (Sora, Kling, Runway, Luma, Pika), about half from the "
+    "newest (Veo 3.1, Sora 2, Kling 2.6) and from some open-source ones, and "
+    "wrongly flagged about 6% of real test videos (reports/aigen_detector.md). "
+    "Clips under 2 s are not checked. It also reads C2PA Content Credentials "
+    "when present and runs a weak face-swap check (catches about a quarter of "
     "Deepfakes-style swaps; blind to reenactment fakes such as Face2Face and "
     "NeuralTextures). 'No sign of AI generation' is not proof a video is real."
 )
