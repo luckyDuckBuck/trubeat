@@ -29,11 +29,54 @@ from trubeat import app, features, hr, ingest, signal
 REPO = Path(__file__).resolve().parents[1]
 FAMILIES = ["Deepfakes", "Face2Face", "FaceSwap", "NeuralTextures"]
 
+# ---------------------------------------------------------------------------
+# Frozen copy of the app's verdict logic as audited on 2026-11-01 (commit
+# 27bcf74), so this baseline stays reproducible after the app moved to the
+# fused verdict (docs/11 E1). Do not "fix" these: they are the audited
+# behaviour, bugs included.
+LEGACY_MIN_DURATION_S = 10.0
+LEGACY_MIN_FACE_VALID_FRAC = 0.70
+LEGACY_MIN_SNR = 10.0
+
+
+def legacy_mean_snr(ppg: np.ndarray, fps: float) -> float:
+    """The audited peak/mean in-band power ratio (0.7-14 Hz), docs/11 F1."""
+    n = ppg.shape[0]
+    freqs = np.fft.rfftfreq(n, d=1.0 / fps)
+    mask = (freqs >= 0.7) & (freqs <= 14.0)
+    snrs = []
+    for r in range(ppg.shape[1]):
+        power = np.abs(np.fft.rfft(ppg[:, r] - np.nanmean(ppg[:, r]))) ** 2
+        band = power[mask]
+        if band.size and np.all(np.isfinite(band)):
+            snrs.append(float(band.max() / (band.mean() + 1e-12)))
+    return float(np.mean(snrs)) if snrs else 0.0
+
+
+def legacy_verdict(dur, fvf, snr, agree, score, threshold) -> tuple[str, str]:
+    """(verdict, reason) exactly as the audited verdict_for decided it."""
+    reasons = []
+    if dur < LEGACY_MIN_DURATION_S:
+        reasons.append("short")
+    if fvf <= 0.0:
+        reasons.append("no face was tracked")
+    elif fvf < LEGACY_MIN_FACE_VALID_FRAC:
+        reasons.append("face tracked in only part of the clip")
+    if snr < LEGACY_MIN_SNR:
+        reasons.append("SNR")
+    if agree is None:
+        reasons.append("no agreement estimate")
+    if reasons:
+        return "inconclusive", "; ".join(reasons)
+    if score is None:
+        return "inconclusive", "no detector"
+    return ("real" if score >= threshold else "fake"), ""
+
 
 def replay(manifest: Path, trace_dir: Path, bundle: dict) -> pd.DataFrame:
     cols, det = bundle["feature_columns"], bundle["model"]
     method, win_s = bundle["method"], float(bundle["window_s"])
-    thr = app.VerdictThresholds(detector_threshold=float(bundle["threshold"]))
+    thr = float(bundle["threshold"])
     rows = []
     for _, m in pd.read_csv(manifest).iterrows():
         npz = trace_dir / f"{m.video_id}.npz"
@@ -55,21 +98,15 @@ def replay(manifest: Path, trace_dir: Path, bundle: dict) -> pd.DataFrame:
                for r in range(ppg.shape[1])]
         fin = [float(b) for b in per if np.isfinite(b)]
         agree = float(np.std(fin)) if len(fin) > 1 else None
-        snr = app._mean_snr(ppg, fps)
+        snr = legacy_mean_snr(ppg, fps)
         feat = features.window_features(ppg, fps, win_s=win_s, overlap=0.5)
         score = float(np.mean(det.decision_function(feat[cols]))) if len(feat) else None
-        a = app.PulseAnalysis(verdict="", headline="", detail="", per_roi_hr=fin,
-                              agreement_bpm=agree, face_valid_frac=fvf,
-                              mean_snr=snr, duration_s=dur, detector_score=score,
-                              detector_available=score is not None)
-        app.verdict_for(a, thr)
-        why = a.verdict
-        if a.verdict == "inconclusive":
-            # "tracked" only appears in the face-tracking gate's message
-            # (the SNR message also says "face regions").
-            why = ("inc:face" if "tracked" in a.detail else
-                   "inc:snr" if "SNR" in a.detail else "inc:other")
-        rec.update(verdict=a.verdict, why=why, snr=snr, agreement=agree,
+        verdict, reason = legacy_verdict(dur, fvf, snr, agree, score, thr)
+        why = verdict
+        if verdict == "inconclusive":
+            why = ("inc:face" if "tracked" in reason else
+                   "inc:snr" if "SNR" in reason else "inc:other")
+        rec.update(verdict=verdict, why=why, snr=snr, agreement=agree,
                    score=score, hr_min=min(fin) if fin else None)
         rows.append(rec)
     return pd.DataFrame(rows)
@@ -116,12 +153,12 @@ def snr_probe(fps: float = 25.0, n: int = 300, seed: int = 0) -> None:
         t = np.arange(T) / fps
         return 0.3 * np.sin(2 * np.pi * 1.2 * t)[:, None] + rng.normal(size=(T, 3))
 
-    print(f"\nSNR gate probe (app._mean_snr, gate = {app.DEFAULT_THRESHOLDS.min_snr:g}):")
+    print(f"\nSNR gate probe (legacy peak/mean SNR, gate = {LEGACY_MIN_SNR:g}):")
     print(f"  {'signal':30s} {'10.9 s':>7s} {'30 s':>7s} {'120 s':>7s}")
     for name, gen in (("white noise, no pulse", white),
                       ("random-walk drift, no pulse", drift),
                       ("weak 72 bpm pulse + noise", pulse)):
-        vals = [np.median([app._mean_snr(gen(int(s * fps)), fps) for _ in range(n)])
+        vals = [np.median([legacy_mean_snr(gen(int(s * fps)), fps) for _ in range(n)])
                 for s in (10.88, 30.0, 120.0)]
         print(f"  {name:30s} " + " ".join(f"{v:7.1f}" for v in vals))
 
