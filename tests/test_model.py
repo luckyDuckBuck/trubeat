@@ -138,3 +138,54 @@ def test_predict_video_raises_no_face_when_never_tracked():
         with pytest.raises(NoFace) as exc_info:
             predict_video("vid.mp4", model, {})
     assert exc_info.value.code == "E_NO_FACE"
+
+
+def test_predict_video_accepts_the_bundled_g2_detector():
+    """docs/11 F9: the packaged G2 bundle was fitted without the positional
+    window columns; predict_video must hand it exactly its fitted columns
+    instead of crashing with sklearn's "feature names unseen at fit time"."""
+    from pathlib import Path
+
+    import joblib
+
+    from trubeat import features
+
+    bundle_path = Path(__file__).resolve().parents[1] / "src/trubeat/models/detector.joblib"
+    if not bundle_path.is_file():
+        pytest.skip("packaged detector bundle not present")
+    model = joblib.load(bundle_path)["model"]
+    patches, stream, landmarks, valid, hr_res = _mock_stages()
+    rng = np.random.default_rng(0)
+    feat = pd.DataFrame(
+        rng.random((3, len(features.FEATURE_COLUMNS))), columns=features.FEATURE_COLUMNS
+    )
+    with patches[0] as m_ing, patches[1] as m_face, patches[2] as m_roi, patches[
+        3
+    ] as m_sig, patches[4] as m_feat, patches[5] as m_hr:
+        m_ing.open_video.return_value = stream
+        m_face.track_landmarks.return_value = (landmarks, valid)
+        m_roi.extract_roi_means.return_value = np.zeros((300, 3, 3))
+        m_sig.extract_ppg.return_value = np.zeros((300, 3))
+        m_feat.window_features.return_value = feat
+        m_hr.estimate_hr.return_value = hr_res
+        pred = predict_video("vid.mp4", model, {})
+    assert pred.n_windows == 3
+    assert pred.label in ("real", "fake")
+
+
+def test_predict_video_names_missing_trained_columns():
+    """A bundle that expects a column the feature code no longer emits must
+    fail with a message naming it, not a bare sklearn error."""
+    model = MagicMock()
+    model.feature_names_in_ = np.array(["a", "not_a_feature"])
+    patches, stream, landmarks, valid, hr_res = _mock_stages()
+    with patches[0] as m_ing, patches[1] as m_face, patches[2] as m_roi, patches[
+        3
+    ] as m_sig, patches[4] as m_feat:
+        m_ing.open_video.return_value = stream
+        m_face.track_landmarks.return_value = (landmarks, valid)
+        m_roi.extract_roi_means.return_value = np.zeros((300, 3, 3))
+        m_sig.extract_ppg.return_value = np.zeros((300, 3))
+        m_feat.window_features.return_value = pd.DataFrame({"a": [1.0]})
+        with pytest.raises(ValueError, match="not_a_feature"):
+            predict_video("vid.mp4", model, {})

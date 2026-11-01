@@ -49,6 +49,28 @@ def _to_label(value) -> str:
     return str(value)
 
 
+def _select_trained_columns(feat: pd.DataFrame, model) -> pd.DataFrame:
+    """Give the model exactly the feature columns it was fitted on.
+
+    A pipeline fitted on a DataFrame records ``feature_names_in_``. The G2
+    detector bundle was trained without the positional window columns
+    (``detector.POSITIONAL_COLUMNS``), while ``window_features`` always
+    emits them, so passing the full frame raised sklearn's "feature names
+    unseen at fit time" error (docs/11 F9). Models without recorded names
+    get the frame unchanged.
+    """
+    names = getattr(model, "feature_names_in_", None)
+    if not isinstance(names, (list, tuple, np.ndarray)) or len(names) == 0:
+        return feat
+    missing = [c for c in names if c not in feat.columns]
+    if missing:
+        raise ValueError(
+            f"model expects feature columns {missing} that window_features "
+            "did not produce; the bundle and the feature code disagree"
+        )
+    return feat[list(names)]
+
+
 def train_classifier(X: pd.DataFrame, y: np.ndarray, groups: np.ndarray) -> Pipeline:
     """Fit Pipeline(StandardScaler, LogisticRegression) with GroupKFold CV.
 
@@ -108,6 +130,7 @@ def predict_video(path: str, model, config: dict) -> Prediction:
     )
     if len(feat) == 0:
         raise ValueError(f"no analysis windows produced for video {path!r}")
+    feat = _select_trained_columns(feat, model)
 
     votes = [_to_label(v) for v in model.predict(feat)]
     label, n_win = Counter(votes).most_common(1)[0]
