@@ -503,6 +503,32 @@ Pending: `python scripts/train_aigen.py --robustness-only` →
 | P6 | A larger frozen backbone (DINOv2-B or CLIP ViT-L/14) for the AI layer, embeddings computed once on a notebook GPU | linear probes on the small backbone plateau at 0.81 leave-one-family-out | macro LOGO AUC +0.03 or better at < 10 s CPU inference for a 10 s clip |
 | P7 | Record a real tab capture through the extension on a few known clips (human: needs a browser) | the VP9 row is a simulation | the extension's verdicts on those clips logged in `reports/user_eval.md` |
 
+### 9.7 P3, first step: Rapidata clips of current generators (rule fixed before any result)
+
+Source: Rapidata's text-to-video human-preference sets on Hugging Face
+(Apache-2.0, ungated). The MP4s cover Veo 2 / 3 / 3.1, Seedance 1 Pro,
+Moonvalley Marey, Luma Ray 2, Runway Gen-3 Alpha, Sora (v1), Pika 1 / 2.2,
+HunyuanVideo, Wan 2.1 and Mochi 1 on one ~100-prompt list. The Sora 2,
+Kling 2.1, Ray 2 and Runway sets ship only GIF previews and are not used: a
+GIF palette would teach "GIF = AI". The clips are added to the pool only
+(grouped by prompt); GenBuster and the FF++ test reals stay external.
+
+Consequence for the numbers: GenBuster ood/wild clips from Sora, Luma,
+Runway, Pika, Veo 3.1 and Seedance then measure *a seen family from another
+curator*, not an unseen generator. Unseen-generator performance stays the
+pool's leave-one-family-out AUC.
+
+Adopt the retrained model ("v2") over the shipped one only if all hold:
+
+1. false alarms at v2's own out-of-fold threshold: GenBuster reals ≤ 7.3%
+   (the shipped model's upper CI) and FF++ c23 test reals ≤ 2/135;
+2. GenBuster wild recall ≥ shipped + 5 points, and no GenBuster tier's
+   recall drops by more than 3 points;
+3. pool macro leave-one-family-out AUC over the 17 original families ≥
+   shipped − 0.01.
+
+Otherwise the shipped model stays, and the result is recorded here.
+
 ## 10. Progress log
 
 Commits on `main` (local; not pushed), oldest first, from the approval of
