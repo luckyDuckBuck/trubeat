@@ -17,7 +17,7 @@
  * Run:  node tests/js/extension_test.mjs [--backend http://127.0.0.1:7860]
  */
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { createServer } from "node:http";
@@ -48,14 +48,22 @@ function section(title) {
 
 const backendArgIndex = process.argv.indexOf("--backend");
 const videoArgIndex = process.argv.indexOf("--video");
+// Live backend checks are opt-in (--backend or TRUBEAT_BACKEND). They used
+// to run whenever *any* server answered on :7860, which turned a plain
+// `pytest` into a multi-GB upload and an OOM kill on an 8 GB laptop
+// (docs/11 F12).
 const BACKEND =
   backendArgIndex > -1
     ? process.argv[backendArgIndex + 1]
-    : process.env.TRUBEAT_BACKEND || "http://127.0.0.1:7860";
+    : process.env.TRUBEAT_BACKEND || null;
+// A small default clip (FF++ c23, ~1 MB). The harness reads the whole file
+// into memory to upload it, so anything huge is refused below.
+const MAX_LIVE_VIDEO_BYTES = 200 * 1024 * 1024;
 const VIDEO =
   videoArgIndex > -1
     ? process.argv[videoArgIndex + 1]
-    : join(HERE, "..", "..", "data", "raw", "ubfc_rppg", "subject1", "vid.avi");
+    : join(HERE, "..", "..", "data", "raw", "ffpp", "original_sequences",
+        "youtube", "c23", "videos", "000.mp4");
 
 /** Model the browser's message fidelity: chrome.runtime messages are
  * JSON-serialised, so anything that cannot be JSON (a Blob) arrives as {}. */
@@ -176,7 +184,18 @@ section("1. offscreen.js — the backend client (ANALYZE against a backend)");
     JSON.stringify(posted)
   );
 
-  if (BACKEND) {
+  if (!BACKEND) {
+    console.log(
+      "  skip live backend checks (opt-in: pass --backend URL or set " +
+        "TRUBEAT_BACKEND)"
+    );
+  } else if (!existsSync(VIDEO) || statSync(VIDEO).size > MAX_LIVE_VIDEO_BYTES) {
+    check(
+      "live test video is present and small enough to upload from memory",
+      false,
+      `${VIDEO} (limit ${MAX_LIVE_VIDEO_BYTES} bytes; pass --video <small clip>)`
+    );
+  } else {
     // Is a backend actually up? If not, the live checks are skipped (CI has
     // no backend) rather than failed — the offline checks still run.
     let up = false;
@@ -250,7 +269,7 @@ section("1. offscreen.js — the backend client (ANALYZE against a backend)");
         check("result carries the caveat", /face-swap/i.test(result.caveat || ""));
         check(
           "headline uses the app wording",
-          /Pulse consistent|Pulse inconsistent|Inconclusive/.test(
+          /Pulse consistent|Pulse inconsistent|Likely real|Likely fake|Inconclusive/.test(
             result.headline || ""
           ),
           String(result.headline)

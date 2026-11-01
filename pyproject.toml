@@ -38,3 +38,8 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/trubeat"]
+
+[tool.pytest.ini_options]
+# Only the project's tests: third_party/ holds reference clones whose own
+# test files need torch/GPU stacks (docs/11 F12).
+testpaths = ["tests"]

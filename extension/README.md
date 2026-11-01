@@ -172,7 +172,8 @@ Run through this after loading the extension.
 ## Automated tests
 
 ```bash
-node tests/js/extension_test.mjs --backend http://127.0.0.1:7860
+node tests/js/extension_test.mjs                                   # offline checks
+node tests/js/extension_test.mjs --backend http://127.0.0.1:7860   # + live checks (opt-in; small clip via --video)
 ```
 
 This loads the shipped extension files and drives the real code paths: the
