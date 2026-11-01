@@ -1,0 +1,27 @@
+# Phase D (docs/11) — whole-frame AI-generated video detector
+#
+# Frozen vision backbone -> per-frame embeddings -> geometry of the frame
+# trajectory in embedding space (ReStraV-style step size + curvature,
+# D3-style second-order differences) and the mean embedding -> classifier.
+
+backbone: vit_small_patch14_dinov2.lvd142m   # timm id; 21.6M params, ~14 frames/s on a Ryzen 5 4600H
+img_size: 224            # input side (DINOv2 patch 14 -> 16x16 tokens)
+torch_threads: 6         # leave headroom on a 12-thread laptop
+
+# Frame sampling: fixed rate in *time*, so clips with different native fps
+# yield comparable trajectories. 16 frames at 8 fps = one 2 s segment.
+sample_fps: 8.0
+n_frames: 16
+max_segments: 3          # evenly spaced 2 s segments per clip (short clips get fewer)
+min_duration_s: 2.0      # one full segment; generated clips are often 4-10 s
+
+# Feature sets evaluated (docs/11 D5): geometry only, mean embedding only,
+# or both. The bundle records which one it was trained with.
+feature_set_candidates: [geometry, embedding, combined]
+classifier: logreg       # standardised logistic regression
+C_candidates: [0.01, 0.1, 1.0]
+seed: 7
+
+# Cache (embeddings are the expensive step; keyed by video bytes + backbone
+# + sampling parameters).
+cache_dir: data/processed/aigen_emb

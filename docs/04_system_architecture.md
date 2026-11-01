@@ -137,6 +137,15 @@ def predict_video(path: str, model) -> Prediction  # label, confidence, votes[],
 # eval.py
 def evaluate_hr(manifest) -> HRReport      # MAE, RMSE, Pearson, Bland-Altman
 def evaluate_detector(manifest, model) -> DetectionReport  # acc, AUC, PR, confusion
+
+# hr.py (added 2026-11-01, docs/11 B2; additive)
+def pulse_snr_db(ppg: np.ndarray, fps: float, bpm=None, band=(0.7, 3.0)) -> float  # dB
+
+# aigen.py (added 2026-11-01, docs/11 Phase D; additive, whole-frame detector)
+def sample_segments(path, config=None) -> tuple[np.ndarray, dict]  # (S, N, H, W, 3) uint8, meta
+class Embedder: def embed(frames: np.ndarray) -> np.ndarray      # (N, D) unit-norm
+def trajectory_features(emb: np.ndarray) -> dict                  # GEOMETRY_COLUMNS
+def analyze(path, bundle, embedder=None) -> AIGenResult           # p_ai, score, label, warnings
 ```
 
 ## 5. Key design numbers

@@ -28,6 +28,10 @@ tracking = ["mlflow", "dvc"]  # local file store / dataset versioning
 # (NOT a pipeline dependency). Must stay <0.23: scikit-image 0.23+ forces
 # numpy>=2, which violates the numpy<2.0 pin above (learned 2026-10-18).
 toolbox_ref = ["scikit-image>=0.22,<0.23"]
+# Phase D whole-frame AI-video detector (docs/11). Install torch from the
+# CPU index first, or pip pulls ~3 GB of CUDA wheels:
+#   uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+aigen = ["torch", "torchvision", "timm", "c2pa-python"]
 
 [project.scripts]
 trubeat = "trubeat.cli:main"
