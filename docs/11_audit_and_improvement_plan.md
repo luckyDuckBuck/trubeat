@@ -251,6 +251,43 @@ task. Each phase ends with a short report in `reports/`.
 | B4 | F2 support: a capture-quality score (face size in pixels, bits per pixel, motion, exposure) and an "expected pulse visibility" model fitted on UBFC (visible) vs FF++ (mostly not) | reports P(pulse visible \| conditions) with a reliability curve |
 | B5 | Re-run the G2 evaluation with B1–B3, same protocol, bootstrap CIs | report with per-family AUCs; honest whichever way it goes |
 
+#### Phase B result so far (2026-11-01, overnight run): the pulse is not measurable on FF++ c23
+
+B2 is implemented (`hr.pulse_snr_db`, tested). On synthetic data it meets its
+bar: noise and drift sit at −3 to −8 dB, with a 95th percentile of ≤ −0.1 dB
+at every length from 5 to 120 s. A clear pulse (amplitude equal to the noise
+std, heart rate wandering) scores 1–5 dB. The old metric passed drift at
+22–46 and grew with length. **0 dB** is therefore the pulse-visible threshold.
+
+Measured on the 534 cached FF++ c23 clips that pass the face and length
+checks, using filtered signals (`runs/b2_snr_ffpp.csv`):
+
+| method | real-clip median SNR | real clips ≥ 0 dB | AUC of low SNR → fake (DF / F2F / FS / NT) |
+|---|---|---|---|
+| green (filtered) | −3.5 dB | **0%** | 0.57 / 0.47 / 0.56 / 0.47 |
+| POS | −4.0 dB | **0%** | 0.50 / 0.50 / 0.42 / 0.45 |
+| CHROM | −3.9 dB | 1% | 0.47 / 0.50 / 0.45 / 0.51 |
+
+The user's iStock clip reads −6 to −8 dB per region. **Real web video looks
+like noise to this pipeline**, which confirms R-01 with the standard metric.
+The old SNR check passed these clips only because it counted drift, and the
+G2 detector's Deepfakes signal (AUC 0.69) cannot be physiological, since
+there is no measurable pulse to be inconsistent. Filtering lowered the
+share of real clips with a region under 50 bpm from 55% to 39%; the rest is
+noise peaking anywhere, which filtering cannot fix.
+
+**Re-plan (keep only changes that improve the tool):**
+
+- Not wiring B2 in as a hard gate: on web video it would make ~100% of clips
+  Inconclusive, the exact failure being fixed. It becomes the "is the pulse
+  layer applicable?" signal in the fused verdict (E1), reported as evidence.
+- **Deferred: B1b, B3, B4, B5.** They improve a measurement that is below the
+  noise floor on the target material, so they can't change verdicts there.
+  They return if the user's labelled set (F-1) shows close-up,
+  high-quality clips where the pulse is measurable.
+- **D moves up** to straight after A. The improvement the user can see comes
+  from the whole-frame AI-video detector.
+
 ### Phase C — Verdict contract (2–3 days; changes the `PulseAnalysis` schema → doc edit to `docs/04`)
 
 | task | what | done when |

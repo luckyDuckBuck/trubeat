@@ -3,7 +3,14 @@
 from dataclasses import dataclass, field
 
 import numpy as np
-from scipy.signal import detrend
+from scipy.signal import detrend, periodogram
+
+# Pulse SNR (de Haan & Jeanne 2013), as implemented by rPPG-Toolbox
+# (third_party/rppg-toolbox/evaluation/post_process.py, _calculate_SNR):
+# power within +/-6 bpm of the pulse frequency and of twice that frequency,
+# over the power in the rest of the 0.6-3.3 Hz range, in dB.
+SNR_HALF_WIDTH_HZ = 6.0 / 60.0
+SNR_RANGE_HZ = (0.6, 3.3)  # Cassani et al., EMBC 2020 (toolbox default)
 
 
 @dataclass
@@ -123,3 +130,57 @@ def estimate_hr(
     total = float(np.sum(p))
     confidence = float(p[k] / total) if total > 0.0 else 0.0
     return HRResult(bpm=f_peak * 60.0, confidence=confidence, spectrum=p, freqs=f)
+
+
+def _next_pow2(n: int) -> int:
+    return 1 << max(0, int(n - 1).bit_length())
+
+
+def pulse_snr_db(
+    ppg: np.ndarray,
+    fps: float,
+    bpm: float | None = None,
+    band: tuple[float, float] = (0.7, 3.0),
+) -> float:
+    """Signal-to-noise ratio of the pulse in a 1-D PPG signal, in dB.
+
+    Power in the two harmonic windows (``bpm`` and ``2 * bpm``, each
+    +/-``SNR_HALF_WIDTH_HZ``) over the power in the rest of
+    ``SNR_RANGE_HZ``, from a zero-padded periodogram. This replaces the
+    peak/mean ratio the app used before (docs/11 F1), which passed slow drift
+    with no pulse and grew with clip length; this ratio is bounded by the
+    window widths, not by the number of bins.
+
+    Without a reference heart rate (``bpm=None``, the normal case for
+    in-the-wild video) the pulse frequency is the ``estimate_hr`` peak inside
+    ``band``. Picking the strongest peak biases pure noise upward somewhat;
+    the gate threshold is calibrated with that bias included.
+
+    Feed it a conditioned (band-passed) signal. Returns NaN only when the
+    signal has no valid samples, matching ``estimate_hr``'s NaN bpm for the
+    same input.
+    """
+    x = np.asarray(ppg, dtype=float)
+    if x.ndim != 1:
+        raise ValueError(f"pulse_snr_db expects a 1-D PPG signal, got shape {x.shape}")
+    x = _interp_nans(x)
+    if x.shape[0] < 4 or not np.all(np.isfinite(x)):
+        return float("nan")
+    if bpm is None:
+        bpm = estimate_hr(x, fps, band=band).bpm
+    if not np.isfinite(bpm):
+        return float("nan")
+    f0 = float(bpm) / 60.0
+    freqs, pxx = periodogram(x - x.mean(), fs=fps, nfft=_next_pow2(max(x.shape[0], 2048)),
+                             detrend=False)
+    in_range = (freqs >= SNR_RANGE_HZ[0]) & (freqs <= SNR_RANGE_HZ[1])
+    sig = (np.abs(freqs - f0) <= SNR_HALF_WIDTH_HZ) | (
+        np.abs(freqs - 2.0 * f0) <= SNR_HALF_WIDTH_HZ
+    )
+    p_sig = float(np.sum(pxx[sig]))
+    p_rest = float(np.sum(pxx[in_range & ~sig]))
+    if p_rest <= 0.0:
+        return float("inf") if p_sig > 0.0 else float("nan")
+    if p_sig <= 0.0:
+        return float("-inf")
+    return float(10.0 * np.log10(p_sig / p_rest))

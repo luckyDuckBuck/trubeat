@@ -113,3 +113,70 @@ def test_estimate_hr_harmonic_picker_no_halving():
     # Must pick the true fundamental (~100 bpm), not the sub-harmonic (~50 bpm)
     assert abs(res.bpm - 100.0) <= 1.0, f"harmonic halving: got {res.bpm:.1f} bpm"
     assert res.confidence > 0.2
+
+
+# ------------------------------------------------- pulse SNR (docs/11 B2) ---
+
+
+def _cond(x, fps):
+    from trubeat.signal import condition
+
+    return condition(x, fps, band=(0.7, 3.0))
+
+
+def test_pulse_snr_high_for_a_visible_pulse():
+    from trubeat.hr import pulse_snr_db
+
+    fps, rng = 25.0, np.random.default_rng(0)
+    t = np.arange(int(30 * fps)) / fps
+    x = np.sin(2 * np.pi * 1.2 * t) + rng.normal(0, 1.0, t.size)
+    assert pulse_snr_db(_cond(x, fps), fps) > 2.0
+
+
+def test_pulse_snr_low_for_noise_and_drift():
+    """The old peak/mean SNR passed random-walk drift at 22-46 (gate 10).
+    The pulse SNR keeps noise and drift below 0 dB (docs/11 F1)."""
+    from trubeat.hr import pulse_snr_db
+
+    fps, rng = 25.0, np.random.default_rng(1)
+    n = int(30 * fps)
+    noise = [pulse_snr_db(_cond(rng.normal(size=n), fps), fps) for _ in range(40)]
+    drift = [
+        pulse_snr_db(_cond(np.cumsum(rng.normal(size=n)) + rng.normal(size=n), fps), fps)
+        for _ in range(40)
+    ]
+    assert np.median(noise) < -2.0
+    assert np.median(drift) < -1.0
+
+
+def test_pulse_snr_does_not_grow_with_clip_length():
+    """Peak/mean grew with the number of bins; this ratio must not."""
+    from trubeat.hr import pulse_snr_db
+
+    fps, rng = 25.0, np.random.default_rng(2)
+
+    def med(seconds):
+        n = int(seconds * fps)
+        return np.median(
+            [pulse_snr_db(_cond(rng.normal(size=n), fps), fps) for _ in range(40)]
+        )
+
+    assert abs(med(10.0) - med(120.0)) < 4.0
+    assert med(120.0) < med(10.0) + 1.0  # no upward drift with length
+
+
+def test_pulse_snr_uses_the_given_heart_rate():
+    from trubeat.hr import pulse_snr_db
+
+    fps = 25.0
+    t = np.arange(int(30 * fps)) / fps
+    x = _cond(np.sin(2 * np.pi * 1.2 * t), fps)
+    assert pulse_snr_db(x, fps, bpm=72.0) > pulse_snr_db(x, fps, bpm=130.0) + 10.0
+
+
+def test_pulse_snr_degenerate_inputs():
+    from trubeat.hr import pulse_snr_db
+
+    assert np.isnan(pulse_snr_db(np.full(300, np.nan), 25.0))
+    with pytest.raises(ValueError):
+        pulse_snr_db(np.zeros((10, 2)), 25.0)
