@@ -90,8 +90,8 @@ def main() -> None:
     # 2. near-duplicates between pool and external (mean-embedding cosine)
     ecols = [c for c in cols if c.startswith("emb_")] or [
         c for c in data.columns if c.startswith("emb_")]
-    P = pool[ecols].to_numpy(dtype=np.float32)
-    E = ext[ecols].to_numpy(dtype=np.float32)
+    P = np.array(pool[ecols], dtype=np.float32)  # writable copy
+    E = np.array(ext[ecols], dtype=np.float32)
     P /= np.linalg.norm(P, axis=1, keepdims=True) + 1e-8
     E /= np.linalg.norm(E, axis=1, keepdims=True) + 1e-8
     best = np.max(E @ P.T, axis=1)
