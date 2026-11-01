@@ -93,10 +93,13 @@ def load_rows(aigen_manifest: Path, ffpp_manifest: Path) -> pd.DataFrame:
 
 
 def normalized_path(src: str, norm: dict) -> Path:
-    key = hashlib.sha1(
-        f"{src}|{norm['short_side']}|{norm['crf']}|{norm['preset']}".encode()
-    ).hexdigest()[:16]
-    return REPO / norm["out_dir"] / f"{key}.mp4"
+    if norm.get("vcodec"):  # e.g. the tab-capture-like VP9 WebM variant
+        sig = f"{src}|{norm['short_side']}|{norm['vcodec']}|{norm['bitrate']}"
+        ext = ".webm"
+    else:  # libx264 (key kept identical to earlier runs, so caches stay valid)
+        sig = f"{src}|{norm['short_side']}|{norm['crf']}|{norm['preset']}"
+        ext = ".mp4"
+    return REPO / norm["out_dir"] / f"{hashlib.sha1(sig.encode()).hexdigest()[:16]}{ext}"
 
 
 def normalize_one(args: tuple[str, dict]) -> tuple[str, str | None]:
@@ -107,11 +110,15 @@ def normalize_one(args: tuple[str, dict]) -> tuple[str, str | None]:
     out.parent.mkdir(parents=True, exist_ok=True)
     s = int(norm["short_side"])
     vf = f"scale='if(gt(iw,ih),-2,{s})':'if(gt(iw,ih),{s},-2)'"
-    tmp = out.with_suffix(".part.mp4")
+    tmp = out.with_suffix(".part" + out.suffix)
+    if norm.get("vcodec"):
+        codec = ["-c:v", str(norm["vcodec"]), "-b:v", str(norm["bitrate"]),
+                 "-deadline", "realtime", "-cpu-used", "8"]
+    else:
+        codec = ["-c:v", "libx264", "-crf", str(norm["crf"]), "-preset", str(norm["preset"])]
     cmd = [
         "ffmpeg", "-nostdin", "-loglevel", "error", "-y", "-i", src, "-t", "20",
-        "-vf", vf, "-c:v", "libx264", "-crf", str(norm["crf"]), "-preset",
-        str(norm["preset"]), "-pix_fmt", "yuv420p", "-an", "-threads", "2", str(tmp),
+        "-vf", vf, *codec, "-pix_fmt", "yuv420p", "-an", "-threads", "2", str(tmp),
     ]
     try:
         subprocess.run(cmd, check=True, timeout=300, capture_output=True)
@@ -362,6 +369,7 @@ def main() -> None:
     variants = []
     sub = cap_rows(ext, int(args.variant_limit), seed=7)
     for name, norm_cfg in (("harsh re-encode (240p, CRF 35)", cfg["robustness_normalize"]),
+                           ("tab-capture-like (VP9 WebM, 720p, 2.5 Mb/s)", cfg["tabcapture_normalize"]),
                            ("as-is (no re-encode)", None)):
         if args.skip_robustness:
             break
