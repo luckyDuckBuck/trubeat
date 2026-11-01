@@ -10,9 +10,8 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from . import detector
+from . import detector, face, features, ingest, roi, signal
 from . import eval as evalmod
-from . import face, features, ingest, roi, signal
 from . import hr as hrmod
 from . import model as modelmod
 from .errors import TrueBeatError

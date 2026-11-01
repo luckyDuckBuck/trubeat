@@ -178,7 +178,7 @@ def test_predict_video_names_missing_trained_columns():
     fail with a message naming it, not a bare sklearn error."""
     model = MagicMock()
     model.feature_names_in_ = np.array(["a", "not_a_feature"])
-    patches, stream, landmarks, valid, hr_res = _mock_stages()
+    patches, stream, landmarks, valid, _ = _mock_stages()
     with patches[0] as m_ing, patches[1] as m_face, patches[2] as m_roi, patches[
         3
     ] as m_sig, patches[4] as m_feat:
