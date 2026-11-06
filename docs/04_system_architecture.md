@@ -69,7 +69,17 @@ of AI generation found" when the AI-video detector ran and nothing fired;
 otherwise inconclusive, with `layers` saying why per layer. The pulse
 itself no longer decides: on web video it is not measurable for real faces
 either (docs/11 B2). `PulseAnalysis` gained `ai_*`, `provenance`, `layers`,
-`decided_by`, `pulse_snr_db` (dB) and lost the peak/mean `mean_snr`. Since 2026-11-06 `analyze_video` takes an optional
+`decided_by`, `pulse_snr_db` (dB) and lost the peak/mean `mean_snr`. Since 2026-11-06 (docs/12) a fourth layer, the face-swap detector
+(`faceswap.py`, clips >= 2 s with a visible face), sits between the
+AI-video detector and the pulse. Its bundle says whether it is decisive
+or evidence only (docs/12 §6). When it is decisive and looked at a face,
+the pulse check no longer decides; otherwise the pulse check keeps its
+old role. `decided_by` is "provenance" | "ai_video" | "face_swap" (the
+detector) | "pulse" (the pulse check) | "". The AI-video layer skips
+title cards (`aigen.guarded_segments`, `W_GRAPHICS_SKIPPED`,
+`E_GRAPHICS_ONLY`).
+
+Since 2026-11-06 `analyze_video` takes an optional
 `progress(fraction, stage)` callback: the web app's progress bar follows
 the real stages (provenance, AI-video detector, decoding, face tracking
 per frame, pulse), weighted by the clip's frame count. A browser extension can therefore reuse
@@ -166,6 +176,20 @@ def analyze(path, bundle, embedder=None) -> AIGenResult           # p_ai, score,
 
 # provenance.py (added 2026-11-01, docs/11 D2; additive, offline C2PA read)
 def read_provenance(path) -> ProvenanceResult  # has_c2pa, ai_declared, source_types, generator
+
+# aigen.py (2026-11-06, docs/12 item A; additive): the title-card guard
+def sample_segments(path, config=None, starts_s=None) -> tuple[np.ndarray, dict]  # explicit starts
+def is_graphic(segment, config=None) -> bool          # mostly flat 8x8 blocks
+def guarded_segments(path, config=None) -> tuple[np.ndarray, dict]  # skips title cards; E_GRAPHICS_ONLY
+
+# faceswap.py (added 2026-11-06, docs/12; additive, face-swap detector)
+def sample_frames(path, n, max_seconds) -> SampledFrames   # n frames, native resolution
+def face_crops(sampled, finder, config=None, progress=None) -> list[FaceCrop]
+class FaceEmbedder: def embed(crops) -> np.ndarray         # stage 1: frozen backbone
+class CNNScorer: def score(crops) -> np.ndarray            # stage 2: fine-tuned CNN logits
+def analyze(path, bundle, embedder=None, finder=None, progress=None) -> FaceSwapResult
+    # score, threshold, label (swap | no_swap | no_face | unknown), real_percentile,
+    # n_faces, top_crop / top_time_s (the most suspicious face), warnings
 ```
 
 ## 5. Key design numbers
@@ -227,6 +251,10 @@ evidence and never changes a verdict by itself:
 | `W_NO_C2PA_LIB` / `W_C2PA_READ` | provenance reader missing / failed; treated as "no credentials" |
 | `W_PULSE_SKIPPED` / `W_PULSE_FAILED` / `W_FACESWAP_FAILED` | pulse or face-swap layer did not run (e.g. `E_SHORT_VIDEO` under 10 s) or raised |
 | `W_TRUNCATED` | analysis capped at the first 120 s |
+| `W_GRAPHICS_SKIPPED` | the AI-video layer skipped title-card / graphic segments and scored a later one (docs/12 item A) |
+| `E_GRAPHICS_ONLY` | every candidate segment in the first 30 s was a graphic; the AI-video layer did not score |
+| `W_FEW_FACES` | the face-swap detector found a face in fewer than 4 of its 16 sampled frames; it does not decide |
+| `W_FACESWAP_DETECTOR_FAILED` | the face-swap detector raised; the other layers still run |
 
 ## 9. Design principles
 

@@ -310,7 +310,7 @@ def wilson(k: int, n: int) -> tuple[float, float]:
     d = 1 + z * z / n
     c = p + z * z / (2 * n)
     h = z * np.sqrt(p * (1 - p) / n + z * z / (4 * n * n))
-    return float((c - h) / d), float((c + h) / d)
+    return max(0.0, float((c - h) / d)), min(1.0, float((c + h) / d))  # no -0.0% from rounding
 
 
 # ------------------------------------------------------------------ main ---
