@@ -93,8 +93,18 @@ identical crops.
 
 **Stage 2, only if stage 1 fails gate 1 (§6):** fine-tune a CNN
 (EfficientNet-B4 at 380 px, the classic FaceForensics++/DFDC recipe) on the
-Colab GPU. Its ~75 MB weights would ship as a release asset fetched by
-`trubeat fetch-models`; CPU inference ~3 s for 16 crops.
+Colab GPU. Its weights (~38 MB in fp16) would ship as a release asset
+fetched by `trubeat fetch-models`; CPU inference ~3 s for 16 crops. Added
+2026-11-06 before any stage-2 result: stage 2 runs in the same notebook
+session when stage 1 fails gate 1 (one Colab run, not two). It trains on
+the train split only; the validation split picks the epoch (best clip AUC)
+and sets the threshold (its reals at the 3% target), since out-of-fold
+scores would need five fine-tunes. Gates are unchanged.
+
+Smoke run (2026-11-06, the 603 local FaceForensics++ clips, 321 for
+training, DINOv2-S only; preliminary and in-domain, not the decision):
+test AUC 0.67–0.75 per family, 3/140 reals flagged. Too few training
+clips to judge stage 1; it shows the pipeline runs end to end.
 
 ## 4. Data
 
