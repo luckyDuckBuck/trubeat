@@ -1,0 +1,18 @@
+# Face-swap detector (docs/12 §3). Shared by scripts/train_faceswap.py, the
+# Colab notebook and the app (via the bundle's stored copy of this config).
+n_frames: 16            # frames sampled evenly over the clip
+max_seconds: 120.0      # sample only within the first max_seconds
+min_faces: 4            # fewer faces found in the sampled frames -> "no face"
+max_faces: 3            # faces the landmarker may return; the largest is used
+crop_scale: 1.3         # square box = landmark bounding box side x crop_scale
+crop_size: 224          # crop resized to crop_size x crop_size (backbone input)
+min_face_px: 40         # faces smaller than this (box side, native px) are ignored
+backbone: vit_small_patch14_dinov2.lvd142m
+feature: cls            # cls | cls+patch (mean patch token appended)
+torch_threads: 4
+target_fpr: 0.03        # threshold = (1 - target_fpr) quantile of out-of-fold real scores
+# candidate backbones for selection (docs/12 §6); the notebook embeds all
+candidates:
+  - vit_small_patch14_dinov2.lvd142m
+  - vit_base_patch16_clip_224.openai
+  - vit_base_patch14_dinov2.lvd142m
