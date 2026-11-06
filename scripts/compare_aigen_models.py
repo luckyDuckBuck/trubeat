@@ -1,6 +1,6 @@
 """Apply the docs/11 §9.7 adoption rule: shipped AI-video model vs a retrain.
 
-Rule (fixed in docs/11 §9.7 before any v2 result existed, commit 3596859):
+Rule (fixed in docs/11 §9.7 before any v2 result existed, commit 57da6f5):
   1. v2 false alarms at its own out-of-fold threshold: GenBuster reals
      <= 7.3% and FF++ c23 test reals <= 2/135;
   2. GenBuster wild recall >= shipped + 5 points, and no GenBuster tier's

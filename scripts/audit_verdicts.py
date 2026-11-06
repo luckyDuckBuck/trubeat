@@ -31,7 +31,7 @@ FAMILIES = ["Deepfakes", "Face2Face", "FaceSwap", "NeuralTextures"]
 
 # ---------------------------------------------------------------------------
 # Frozen copy of the app's verdict logic as audited on 2026-11-01 (commit
-# 27bcf74), so this baseline stays reproducible after the app moved to the
+# 613c323), so this baseline stays reproducible after the app moved to the
 # fused verdict (docs/11 E1). Do not "fix" these: they are the audited
 # behaviour, bugs included.
 LEGACY_MIN_DURATION_S = 10.0

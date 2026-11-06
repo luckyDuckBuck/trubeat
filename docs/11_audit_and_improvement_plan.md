@@ -454,7 +454,7 @@ The threshold chosen on pool reals at 5% FPR held externally (5.7%), so the
 operating point transfers to OpenVid-style footage. It is untested on phone
 video, screen recordings and animation (no such reals in any set).
 
-### 9.3 Independent code review (fixed in `c7a7a96`)
+### 9.3 Independent code review (fixed in `c71cd37`)
 
 An independent review of the night's code found nine defects, all fixed with
 tests: `cap_rows` dropped columns under pandas 3 (killed the first training
@@ -474,10 +474,10 @@ than the applied one.
 | R2-1 | **The pool's AI and real clips differ in format.** Metadata alone (fps, size, aspect, duration, bitrate) separates them with leave-one-family-out AUC 0.993: AI median 768×480 at 0.93 Mb/s, real median 1920×1080 at 3.7 Mb/s | `reports/aigen_audit.md` §1 | The detector never sees metadata (re-encode to 360p CRF 28, centre crop, time-based sampling), but a residual "soft = AI" cue could survive downscaling. Tested directly by resolution counterfactuals (R2-6) |
 | R2-2 | Near-duplicate content across pool and external (mean-embedding cosine ≥ 0.97): 54/1000 GenBuster ood AI clips, 8/1000 GenBuster reals | audit §2 | Removing them changes nothing (recall identical, FPR 5.7% → 5.5%): no leakage effect |
 | R2-3 | The AI-video detector does not see face edits: it flags 0% of FF++ c23 test fakes in all four families (Deepfakes 0/29, Face2Face 0/31, FaceSwap 0/27, NeuralTextures 0/28) and 0/40 reals | audit §4 | Expected (whole-frame features; edits are local). The caveat keeps the face-swap limits; a real face-swap detector is plan item P5 |
-| R2-4 | Only the first 2 s of a clip is scored (the bundle is evaluated on one segment); every clip carried a misleading `W_SHORT_CLIP` | live app run | Fixed (`ba8fe4c`): `W_PARTIAL_COVERAGE` states what was scored. Multi-segment scoring is P2 |
+| R2-4 | Only the first 2 s of a clip is scored (the bundle is evaluated on one segment); every clip carried a misleading `W_SHORT_CLIP` | live app run | Fixed (`7197848`): `W_PARTIAL_COVERAGE` states what was scored. Multi-segment scoring is P2 |
 | R2-5 | 579 AIGVDBench clips are under 2 s and cannot be scored (AccVideo, AnimateDiff, 78% of HunyuanVideo, Open-Sora T2V, VideoCrafter) | training log | Out of scope by design: such clips come back Inconclusive with `E_SHORT_VIDEO` |
 | R2-6 | The first robustness rows used only 20 reals per source (an FPR of 0/20 bounds nothing below 16%) and skipped the app's own re-encode, so they did not measure the app path | `scripts/train_aigen.py` | Fixed: `--robustness-only` re-scores 200 reals per source through transform + the app's normalisation, plus resolution counterfactuals (480p downscale, 1080p upscale). Result: §9.5 |
-| R2-7 | `scripts/eval_user_set.py` would have crashed on the first clip (read a field the review fix removed) | code read | Fixed with a test that uses a real `PulseAnalysis` (`c21041a`) |
+| R2-7 | `scripts/eval_user_set.py` would have crashed on the first clip (read a field the review fix removed) | code read | Fixed with a test that uses a real `PulseAnalysis` (`088e92f`) |
 | R2-8 | Richer descriptors do not help: adding per-dimension frame std or mean frame-to-frame change lowers leave-one-family-out AUC (0.803–0.806 at best vs 0.809–0.813 for the mean alone) | `scripts/explore_aigen_features.py` → `reports/aigen_feature_search.md` | Kept the shipped model (rule fixed in advance: adopt only at +0.01) |
 | R2-9 | The trajectory-geometry features (ReStraV/D3-style step, curvature, acceleration) are near chance on unseen families (macro 0.53–0.57) | `reports/aigen_detector.md` | The embedding carries the signal; geometry stays in the code as a candidate set, unselected |
 
@@ -565,7 +565,7 @@ Otherwise the shipped model stays, and the result is recorded here.
 
 **Result (2026-11-01 14:20, `scripts/compare_aigen_models.py` →
 `reports/aigen_v2_decision.md`): all rules pass; v2 adopted and shipped
-(`b69e763`).** 1,492 Rapidata clips (14 generator labels) joined the pool;
+(`0c15937`).** 1,492 Rapidata clips (14 generator labels) joined the pool;
 v2's threshold from out-of-fold pool reals is +1.1149.
 
 | rule | v2 | shipped (v1) | pass |
@@ -597,7 +597,7 @@ Checks on the result, run after the decision and not used for it:
 - Labels in the per-generator table of the decision report: Kling 2.6,
   Sora 2, Seedance 1.5/2.0 and Wan 2.5/2.6 have an *earlier version* of
   their family in v2's pool; the report first called them unseen (fixed,
-  `0c786be`).
+  `7bd839a`).
 
 The report's generator count ("38 generators") counts each mode and
 version label (`wan`, `wan2.1`, `wan2.1_t2v`); the caveat says 21
@@ -645,16 +645,16 @@ were dropped from all three variants alike.
 ## 10. Progress log
 
 Commits on `main`, oldest first, from the approval of
-this plan: A2 `af28d3e`, A3 `a600fe9`, A4 `84f975e`, A5 `03025c5`, A6
-`918b690`, B2 `04fe895`, D1/D3 `6c38a44`, D2/D4/D5 `24eabc4`, D3/D6
-`c5b9528`, C/E1 `efb190c`, E2/E3 `ec90fc0`, F-1 tooling `a6d0d29`, LOGO by
-family `62a34ac`, review fixes `c7a7a96`, round-2 audit script `0c9cbec`,
-shipped detector `9e885cf`, coverage warnings `ba8fe4c`, robustness via the
-app path `0f82674`, descriptor search `5e79932`, Rapidata download and the
-§9.7 check `1c5eddb`, Rapidata tests `3e7f3c0`, docs/04 warning table
-`053f301`, decision-report family labels `0c786be`, v2 shipped `b69e763`, robustness
-and v2 docs `b358a32`, website workflow note `0ba218b`, missing-extra error
-`ea821a5`, P2 result (the commit that adds `scripts/eval_multiseg.py`).
+this plan: A2 `12c54a6`, A3 `3d9add0`, A4 `cd6af9c`, A5 `ce6e71e`, A6
+`f0c231a`, B2 `30281ce`, D1/D3 `17d90e9`, D2/D4/D5 `973b7a6`, D3/D6
+`1d3884d`, C/E1 `3c3f612`, E2/E3 `03a354e`, F-1 tooling `3277afd`, LOGO by
+family `aed3b9b`, review fixes `c71cd37`, round-2 audit script `36fa416`,
+shipped detector `1c635c1`, coverage warnings `7197848`, robustness via the
+app path `59544af`, descriptor search `376d58f`, Rapidata download and the
+§9.7 check `18b11bd`, Rapidata tests `32e9ec5`, docs/04 warning table
+`0f443d1`, decision-report family labels `7bd839a`, v2 shipped `0c15937`, robustness
+and v2 docs `85af3d4`, website workflow note `ec05412`, missing-extra error
+`54cd394`, P2 result (the commit that adds `scripts/eval_multiseg.py`).
 
 P2 (multi-segment scoring) ran end to end on 2026-11-06 and was not
 adopted (§9.8); `scripts/eval_multiseg.py` is committed with its result.
