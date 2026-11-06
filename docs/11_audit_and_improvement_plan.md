@@ -513,7 +513,7 @@ What this says:
   the format gap the metadata audit found. A 200-clip FPR has a wide interval
   (5.5% is [3.1, 9.6]), so a change of 1–2 points is within noise.
 - **The extension's capture path is safe** (simulated): VP9 at 720p and
-  2.5 Mb/s moves recall by at most 2 points and false alarms not at all. A
+  2.5 Mb/s moves recall by at most 3 points (id 44% → 42%) and false alarms not at all. A
   real browser capture is still P7.
 - **Heavy compression is the weak point, and it fails towards "real".** At
   240p CRF 35 (a re-shared, re-compressed clip), recall falls by about a

@@ -76,6 +76,14 @@ is the task list — take the topmost unfinished item, finish it, commit, repeat
   `tripathiayushman/trubeat`). No fork round-trip, no PRs for routine work.
   Conventional, small, honest commits — one per finished task. Phase-gate
   reports still go through human review (§9) before the next phase starts.
+- 2026-11-06 (human-requested): the website (`tripathiayushman/trubeat-website`,
+  cloned at `../trubeat-website`, deployed to trubeat.vercel.app by Vercel
+  on push) describes this tool. A major user-facing change (a new check, a
+  new way in, new measured results, changed install steps) gets a site
+  update in the same push cycle: one entry on its Updates page plus any
+  page the change makes wrong. Steps: that repo's README, "When the tool
+  changes". Routine fixes do not. Push the tool first, so the site never
+  describes code that is not public yet.
 
 ## 9. Human gates (only the human does these — prepare each as a single action)
 
