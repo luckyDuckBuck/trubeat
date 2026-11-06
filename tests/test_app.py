@@ -160,8 +160,8 @@ def test_the_pulse_alone_never_decides():
 
 def test_caveat_states_the_measured_envelope():
     c = app_mod.CAVEAT
-    assert "26 generators" in c and "reports/aigen_detector.md" in c
-    assert "6%" in c and "under 2 s" in c  # measured false-alarm rate, scope
+    assert "21 generator families" in c and "reports/aigen_detector_v2.md" in c
+    assert "5%" in c and "under 2 s" in c  # measured false-alarm rate, scope
     assert "Face2Face" in c and "NeuralTextures" in c
     assert "not proof" in c
 

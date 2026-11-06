@@ -69,7 +69,7 @@ checks, and the verdict says which one decided (docs/11 §4):
 | **Inconclusive** | no check could decide; the detail lists why for each one |
 
 Measured accuracy, including false alarms on real videos, is in
-`reports/aigen_detector.md` (written by `scripts/train_aigen.py`) and
+`reports/aigen_detector_v2.md` (written by `scripts/train_aigen.py`) and
 summarised in docs/11. **Score it on your own videos:** put clips you know
 the answer for in `data/raw/user_eval/ai/` and `data/raw/user_eval/real/`,
 then run `python scripts/eval_user_set.py`.
@@ -160,11 +160,14 @@ recorded in `docs/07`.
 **2026-11-01 (docs/11): the app now leads with a whole-frame AI-video
 detector**, because the pulse could not decide on web video (on FF++ c23
 real clips the pulse SNR is below 0 dB in 100% of cases). On held-out
-GenBuster-Bench clips, never used for training or the threshold, it flags
-5.7% [4.4, 7.3] of real clips and 0/135 FF++ real test clips. It catches
-78% [76, 81] of 2024-era commercial generators (Sora, Kling, Gen-3, Luma,
-Pika), 45% [38, 53] of the newest (Veo 3.1, Sora 2, Kling 2.6) and 50%
-[47, 53] of open-source ones. It does not detect face-swaps. The round-2
+GenBuster-Bench clips, never used for training, selection or the
+threshold, the shipped model (the docs/11 §9.7 retrain with 1,492 Rapidata
+clips of current generators added) flags 5.4% [4.2, 7.0] of real clips and
+0/135 FF++ real test clips. It catches 83% [81, 85] of 2024-era commercial
+generators (Sora, Kling, Gen-3, Luma, Pika), 55% [47, 62] of the newest
+(Veo 3.1, Sora 2, Kling 2.6) and 52% [49, 55] of open-source ones. Clips
+under 2 s are not checked. A hard re-encode (240p, CRF 35) cuts the newest-
+generator catch rate roughly in half (docs/11 §9.5). It does not detect face-swaps. The round-2
 audit and the next steps are in `docs/11` §9.
 
 Human gates (env, dataset forms/downloads, ROI glance, gate reviews) are
