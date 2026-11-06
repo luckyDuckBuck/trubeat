@@ -147,3 +147,13 @@ def test_choose_fps_falls_back_without_timestamps():
     assert _choose_fps(30.0, 480, 0.0, 0.0) == 30.0
     assert _choose_fps(30.0, 300, None, None) == 30.0
     assert _choose_fps(30.0, 300, 1200.0, 1200.0) == 30.0
+
+
+def test_decode_reports_progress_for_the_progress_bar(tmp_path):
+    p = synth.write_pulse_video(tmp_path / "v.mp4", fps=30.0, duration_s=10.0)
+    calls = []
+    vs = open_video(str(p), progress=lambda i, n: calls.append((i, n)))
+    assert calls, "no progress reported while decoding"
+    done = [i for i, _ in calls]
+    assert done == sorted(done) and all(n == vs.n_frames for _, n in calls)
+    assert 0 < done[-1] <= vs.n_frames

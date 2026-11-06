@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -61,12 +62,18 @@ def _load_landmarker(model_path: Path):
     return mp_vision.FaceLandmarker.create_from_options(options), mp
 
 
-def track_landmarks(frames: np.ndarray, fps: float) -> tuple[np.ndarray, np.ndarray]:
+def track_landmarks(
+    frames: np.ndarray,
+    fps: float,
+    progress: Callable[[int, int], None] | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
     """Run Face Landmarker on every frame.
 
     Args:
         frames: uint8 (T, H, W, 3) RGB.
         fps: true frame rate (drives per-frame timestamps).
+        progress: optional ``progress(done, total)``, called every 10 frames
+            (the app's progress bar).
 
     Returns:
         landmarks: float32 (T, 478, 2) in pixel coords (NaN where invalid)
@@ -91,6 +98,8 @@ def track_landmarks(frames: np.ndarray, fps: float) -> tuple[np.ndarray, np.ndar
     try:
         last_ts = -1
         for i in range(t):
+            if progress is not None and i % 10 == 0:
+                progress(i, t)
             # VIDEO mode demands strictly increasing timestamps.
             ts_ms = max(round(i * 1000.0 / fps), last_ts + 1)
             last_ts = ts_ms

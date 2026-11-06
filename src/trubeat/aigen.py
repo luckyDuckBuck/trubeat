@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -517,13 +518,19 @@ def analyze(
     embedder: Embedder | None = None,
     use_cache: bool = False,
     normalize: bool = True,
+    progress: Callable[[float, str], None] | None = None,
 ) -> AIGenResult:
     """Score one video with a trained bundle (see scripts/train_aigen.py).
 
     Never raises for bad input: unreadable or too-short clips come back as
-    label "unknown" with the error code in ``warnings``.
+    label "unknown" with the error code in ``warnings``. ``progress(frac,
+    stage)`` reports the stage reached (the app's progress bar).
     """
     import tempfile
+
+    def report(frac: float, stage: str) -> None:
+        if progress is not None:
+            progress(frac, stage)
 
     cfg = merged_config(bundle["config"])
     cfg["max_segments"] = int(cfg.get("max_segments", 3))
@@ -533,8 +540,10 @@ def analyze(
     with tempfile.TemporaryDirectory(prefix="trubeat_aigen_") as tmp:
         src = Path(path)
         if normalize and src.is_file():
+            report(0.0, "re-encoding the clip")
             src, w = normalize_for_inference(src, cfg.get("normalize"), Path(tmp))
             warnings += w
+        report(0.55, "scoring frames with the vision model")
         try:
             seg_emb, meta = segment_embeddings(src, embedder, cfg, use_cache=use_cache)
         except (UnreadableVideo, ShortVideo) as exc:

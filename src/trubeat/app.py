@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -63,6 +64,62 @@ CAVEAT = (
 
 # Analysis is capped so a long upload cannot run for an hour.
 MAX_ANALYSIS_SECONDS = 120.0
+
+# Progress bar weights (UI only; they change no number the analysis
+# produces). Measured with `trubeat serve` on a Ryzen 5 4600H, 49 s 1080p
+# clip, 2026-11-06: the AI-video layer ~5 s, decoding for the pulse ~11 ms
+# and face tracking ~18 ms per frame, the pulse maths ~2 s.
+PROGRESS_COST_AI_S = 5.0
+PROGRESS_COST_DECODE_S_PER_FRAME = 0.011
+PROGRESS_COST_FACE_S_PER_FRAME = 0.018
+PROGRESS_COST_PULSE_S = 2.0
+
+ProgressFn = Callable[[float, str], None]
+
+
+class _ProgressPlan:
+    """One 0-1 progress bar spread over the stages that will run, each in
+    proportion to its expected cost (the clip's frame count drives decoding
+    and face tracking). A no-op when no callback is given."""
+
+    def __init__(self, fn: ProgressFn | None, path: Path, layers: tuple[str, ...],
+                 max_seconds: float) -> None:
+        self.fn = fn
+        self.spans: dict[str, tuple[float, float]] = {}
+        if fn is None:
+            return
+        n_frames, fps = _frame_count(path)
+        pulse = "pulse" in layers and fps > 0 and n_frames / fps >= ingest.MIN_DURATION_S
+        n_tracked = min(n_frames, int(max_seconds * fps)) if pulse else 0
+        costs = {
+            "provenance": 0.1,
+            "ai_video": PROGRESS_COST_AI_S if "ai_video" in layers else 0.0,
+            "decode": n_frames * PROGRESS_COST_DECODE_S_PER_FRAME if pulse else 0.0,
+            "face": n_tracked * PROGRESS_COST_FACE_S_PER_FRAME,
+            "pulse": PROGRESS_COST_PULSE_S if pulse else 0.0,
+        }
+        total = sum(costs.values()) or 1.0
+        start = 0.0
+        for stage, cost in costs.items():
+            self.spans[stage] = (start, start + cost / total)
+            start += cost / total
+
+    def __call__(self, stage: str, frac: float, desc: str) -> None:
+        if self.fn is None or stage not in self.spans:
+            return
+        a, b = self.spans[stage]
+        self.fn(min(0.99, a + (b - a) * max(0.0, min(1.0, frac))), desc)
+
+
+def _frame_count(path: Path) -> tuple[int, float]:
+    """(frames, fps) from container metadata; (0, 0.0) when unknown."""
+    import cv2
+
+    cap = cv2.VideoCapture(str(path))
+    try:
+        return int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0), float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+    finally:
+        cap.release()
 
 
 @dataclass(frozen=True)
@@ -199,6 +256,7 @@ def analyze_video(
     max_seconds: float = MAX_ANALYSIS_SECONDS,
     aigen_path: Path | str | None = None,
     layers: tuple[str, ...] = ("provenance", "ai_video", "pulse"),
+    progress: ProgressFn | None = None,
 ) -> PulseAnalysis:
     """Run every analysis layer on one video and fuse them (docs/11 E1).
 
@@ -206,6 +264,8 @@ def analyze_video(
     is still checked for provenance and by the AI-video detector (>= 2 s).
     Never raises for bad input: what each layer could not do is recorded in
     ``layers`` and, when nothing could run, the verdict is inconclusive.
+    ``progress(fraction, stage)``, when given, is called as each stage
+    advances (the web app's progress bar); it never reaches 1.0 here.
     """
     config = dict(config or {})
     thr = thresholds or DEFAULT_THRESHOLDS
@@ -215,12 +275,16 @@ def analyze_video(
         a.warnings.append("E_UNREADABLE")
         a.layers["file"] = f"not a readable file: {path.name}"
         return verdict_for(a, thr)
+    bar = _ProgressPlan(progress, path, layers, max_seconds)
     if "provenance" in layers:
+        bar("provenance", 0.0, "Reading Content Credentials")
         _provenance_layer(a, path)
     if "ai_video" in layers:
-        _ai_video_layer(a, path, aigen_path)
+        bar("ai_video", 0.0, "AI-video detector: loading the model")
+        _ai_video_layer(a, path, aigen_path, bar)
     if "pulse" in layers:
-        _pulse_layer(a, path, config, model_path, thr, max_seconds)
+        bar("decode", 0.0, "Pulse: decoding the video")
+        _pulse_layer(a, path, config, model_path, thr, max_seconds, bar)
     return verdict_for(a, thr)
 
 
@@ -238,7 +302,8 @@ def _provenance_layer(a: PulseAnalysis, path: Path) -> None:
         a.layers["provenance"] = "no Content Credentials (re-encoding usually strips them)"
 
 
-def _ai_video_layer(a: PulseAnalysis, path: Path, aigen_path) -> None:
+def _ai_video_layer(a: PulseAnalysis, path: Path, aigen_path,
+                    bar: _ProgressPlan | None = None) -> None:
     from . import aigen
     from .errors import ModelMissing
 
@@ -248,7 +313,10 @@ def _ai_video_layer(a: PulseAnalysis, path: Path, aigen_path) -> None:
         a.warnings.append("W_NO_AIGEN_MODEL")
         return
     try:
-        res = aigen.analyze(path, bundle, embedder=embedder)
+        res = aigen.analyze(
+            path, bundle, embedder=embedder,
+            progress=(lambda f, s: bar("ai_video", f, f"AI-video detector: {s}")) if bar else None,
+        )
     except ModelMissing as exc:
         a.layers["ai_video"] = f"not available: {exc}"
         a.warnings.append(exc.code)
@@ -278,12 +346,15 @@ def _ai_video_layer(a: PulseAnalysis, path: Path, aigen_path) -> None:
 def _pulse_layer(
     a: PulseAnalysis, path: Path, config: dict, model_path, thr: VerdictThresholds,
     max_seconds: float,
+    bar: _ProgressPlan | None = None,
 ) -> None:
     """Face tracking, per-region pulse, and the G2 face-swap score."""
+    bar = bar or _ProgressPlan(None, path, (), max_seconds)
     try:
         stream = ingest.open_video(
             str(path),
             frame_height=config.get("frame_height", ingest.DEFAULT_FRAME_HEIGHT),
+            progress=lambda i, n: bar("decode", i / n, f"Pulse: decoding frame {i} of {n}"),
         )
     except TrueBeatError as exc:
         if exc.code == "E_SHORT_VIDEO":
@@ -320,7 +391,11 @@ def _pulse_layer(
         win_s = float(config.get("window_s", 10.0))
 
     try:
-        landmarks, valid = face.track_landmarks(frames, fps)
+        landmarks, valid = face.track_landmarks(
+            frames, fps,
+            progress=lambda i, n: bar("face", i / n, f"Pulse: tracking the face, frame {i} of {n}"),
+        )
+        bar("pulse", 0.0, "Pulse: measuring the pulse and the face-swap score")
         face_valid_frac = float(np.mean(valid)) if len(valid) else 0.0
         traces = roi.extract_roi_means(
             frames, landmarks, valid, config.get("roi_defs", roi.ROI_DEFS_P1)
@@ -642,9 +717,10 @@ def build_demo(
             progress = gr.Progress()
         if not video_path:
             return ("Upload a video first.", "", "", None, CAVEAT)
-        progress(0.1, desc="Analysing (AI-video detector, then pulse)…")
+        progress(0.0, desc="Starting")
         analysis = analyze_video(
-            video_path, cfg, model_path=model_path, thresholds=thresholds
+            video_path, cfg, model_path=model_path, thresholds=thresholds,
+            progress=lambda frac, stage: progress(frac, desc=stage),
         )
         progress(1.0, desc="Done")
         evidence = _evidence_text(analysis)

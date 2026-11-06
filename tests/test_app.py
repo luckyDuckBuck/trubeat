@@ -369,3 +369,35 @@ def test_a_failing_pulse_layer_keeps_the_other_layers(tmp_path, monkeypatch):
     assert a.layers["pulse"].startswith("failed: RuntimeError")
     assert a.ai_available and a.decided_by == "ai_video"
     assert "W_PULSE_FAILED" in a.warnings
+
+
+@needs_model
+def test_progress_moves_forward_through_every_stage(tmp_path, no_aigen):
+    """The web app's bar (docs/11): fractions only grow, stay below 1.0
+    until the app says done, and the face-tracking stage reports per frame."""
+    p = synth.write_pulse_video(tmp_path / "v.mp4", fps=30.0, duration_s=12.0)
+    calls = []
+    app_mod.analyze_video(p, config={"method": "green"},
+                          progress=lambda f, s: calls.append((f, s)))
+    fracs = [f for f, _ in calls]
+    assert fracs == sorted(fracs) and 0.0 <= fracs[0] and fracs[-1] < 1.0
+    stages = " | ".join(s for _, s in calls)
+    for want in ("Content Credentials", "AI-video detector", "decoding frame", "tracking the face, frame",
+                 "measuring the pulse"):
+        assert want in stages
+    assert sum("tracking the face" in s for _, s in calls) >= 10  # per-frame, not one jump
+    assert fracs[-1] > 0.8  # the bar ends near the end, not stuck at 10%
+
+
+def test_progress_plan_gives_short_clips_to_the_ai_layer():
+    """Under 10 s the pulse layer never runs, so its share must not hold
+    the bar back."""
+    import unittest.mock as m
+    with m.patch.object(app_mod, "_frame_count", return_value=(120, 24.0)):  # 5 s clip
+        plan = app_mod._ProgressPlan(lambda f, s: None, Path("x.mp4"), ("provenance", "ai_video", "pulse"), 120.0)
+    assert plan.spans["ai_video"][1] == pytest.approx(1.0)
+    assert plan.spans["face"][1] - plan.spans["face"][0] == 0.0
+    with m.patch.object(app_mod, "_frame_count", return_value=(1186, 24.0)):  # 49 s clip
+        plan = app_mod._ProgressPlan(lambda f, s: None, Path("x.mp4"), ("provenance", "ai_video", "pulse"), 120.0)
+    face_share = plan.spans["face"][1] - plan.spans["face"][0]
+    assert 0.4 < face_share < 0.7  # face tracking is the long stage

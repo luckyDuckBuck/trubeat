@@ -69,7 +69,10 @@ of AI generation found" when the AI-video detector ran and nothing fired;
 otherwise inconclusive, with `layers` saying why per layer. The pulse
 itself no longer decides: on web video it is not measurable for real faces
 either (docs/11 B2). `PulseAnalysis` gained `ai_*`, `provenance`, `layers`,
-`decided_by`, `pulse_snr_db` (dB) and lost the peak/mean `mean_snr`. A browser extension can therefore reuse
+`decided_by`, `pulse_snr_db` (dB) and lost the peak/mean `mean_snr`. Since 2026-11-06 `analyze_video` takes an optional
+`progress(fraction, stage)` callback: the web app's progress bar follows
+the real stages (provenance, AI-video detector, decoding, face tracking
+per frame, pulse), weighted by the clip's frame count. A browser extension can therefore reuse
 `analyze_video` — over Gradio's built-in API or a purpose-built one —
 without a second implementation.
 
@@ -115,10 +118,12 @@ def open_video(path: str, frame_height: int | None = DEFAULT_FRAME_HEIGHT) -> Vi
     # frames, fps, n_frames, w, h, duration_s
     # frame_height caps the decoded frame height (aspect preserved, never
     # upscaled); None keeps native resolution.
+    # 2026-11-06 (additive): optional progress(done, total) every 24 frames.
 
 # face.py
 def track_landmarks(frames: np.ndarray, fps: float) -> tuple[np.ndarray, np.ndarray]
     # -> landmarks (T,478,2) float32, valid (T,) bool
+    # 2026-11-06 (additive): optional progress(done, total) every 10 frames.
 
 # roi.py
 ROI_DEFS_P1 = {"forehead": [...], "cheek_l": [...], "cheek_r": [...]}  # landmark idx lists
@@ -157,6 +162,7 @@ def sample_segments(path, config=None) -> tuple[np.ndarray, dict]  # (S, N, H, W
 class Embedder: def embed(frames: np.ndarray) -> np.ndarray      # (N, D) unit-norm
 def trajectory_features(emb: np.ndarray) -> dict                  # GEOMETRY_COLUMNS
 def analyze(path, bundle, embedder=None) -> AIGenResult           # p_ai, score, label, warnings
+    # 2026-11-06 (additive): optional progress(fraction, stage).
 
 # provenance.py (added 2026-11-01, docs/11 D2; additive, offline C2PA read)
 def read_provenance(path) -> ProvenanceResult  # has_c2pa, ai_declared, source_types, generator

@@ -1,5 +1,6 @@
 """Video ingest: decode + metadata. FR-01, FR-02."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -70,7 +71,11 @@ def _choose_fps(
     return float(fps_meta)
 
 
-def open_video(path: str, frame_height: int | None = DEFAULT_FRAME_HEIGHT) -> VideoStream:
+def open_video(
+    path: str,
+    frame_height: int | None = DEFAULT_FRAME_HEIGHT,
+    progress: Callable[[int, int], None] | None = None,
+) -> VideoStream:
     """Decode a video file and validate it for rPPG work.
 
     Determines the TRUE frame rate: container metadata, cross-checked
@@ -82,6 +87,9 @@ def open_video(path: str, frame_height: int | None = DEFAULT_FRAME_HEIGHT) -> Vi
     never upscaled) while decoding, which bounds peak memory: a 1920x1080
     clip of ~900 frames is 5.8 GB as uint8 and gets the process OOM-killed
     on a small machine. Pass frame_height=None to keep native resolution.
+
+    ``progress(done, total)`` is called every 24 decoded frames when the
+    container reports a frame count (the app's progress bar).
 
     Error mapping:
       - not a file / cannot open / no decodable frames / missing fps
@@ -149,6 +157,8 @@ def open_video(path: str, frame_height: int | None = DEFAULT_FRAME_HEIGHT) -> Vi
                 last_ms = float(cap.get(cv2.CAP_PROP_POS_MSEC))
                 frames[i] = _prep(frame)
                 i += 1
+                if progress is not None and i % 24 == 0:
+                    progress(i, n_meta)
             n = i
             if n < n_meta:  # metadata overcounted — trim the buffer
                 frames = np.ascontiguousarray(frames[:n])
