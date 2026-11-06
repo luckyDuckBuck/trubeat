@@ -47,6 +47,12 @@ import numpy as np
 import pandas as pd
 import yaml
 
+# Colab's kernel exports MPLBACKEND=module://matplotlib_inline...; MediaPipe
+# imports pyplot, and that backend is not installed in the training venv, so
+# every face lookup failed (2026-11-07, Colab run 1). Scripts are headless.
+if os.environ.get("MPLBACKEND", "").startswith("module://"):
+    os.environ["MPLBACKEND"] = "Agg"
+
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "scripts"))
 sys.path.insert(0, str(REPO / "src"))
@@ -233,6 +239,18 @@ def crops_for(row: tuple[str, str]) -> tuple:
         return vid, None, None, 0, f"{type(exc).__name__}: {exc}", []
 
 
+def extracted(out: Path, backbones: list[str], crops_dir: Path | None, vid: str) -> bool:
+    """A video counts as done only when every backbone's file exists, its
+    stage-2 crops are saved, and it did not fail (failed videos are retried)."""
+    files = [out / b / f"{vid}.npz" for b in backbones]
+    if not all(f.is_file() for f in files):
+        return False
+    if crops_dir is not None and not (crops_dir / vid / "done").is_file():
+        return False
+    with np.load(files[0], allow_pickle=False) as z:
+        return str(z["error"]) == ""
+
+
 def cmd_extract(a) -> None:
     cfg = fs.merged_config({k: v for k, v in load_cfg(a.config).items() if k != "candidates"})
     df = pd.read_csv(a.manifest)
@@ -255,11 +273,8 @@ def cmd_extract(a) -> None:
         (out / b).mkdir(parents=True, exist_ok=True)
     crops_dir = Path(a.save_crops) if a.save_crops else None
 
-    def done(vid: str) -> bool:
-        return (all((out / b / f"{vid}.npz").is_file() for b in a.backbones)
-                and (crops_dir is None or (crops_dir / vid / "done").is_file()))
-
-    todo = [(r.video_id, r.path) for r in df.itertuples() if not done(r.video_id)]
+    todo = [(r.video_id, r.path) for r in df.itertuples()
+            if not extracted(out, a.backbones, crops_dir, r.video_id)]
     log(f"{len(df)} videos, {len(todo)} to extract, backbones {a.backbones}, device {device}")
     t0, errors = time.time(), 0
     cnn_size = int(a.cnn_crop_size) if crops_dir else 0
@@ -267,7 +282,13 @@ def cmd_extract(a) -> None:
                                       initargs=(cfg, a.transform, cnn_size)) as pool:
         for k, (vid, crops, times, n_sampled, err, jpgs) in enumerate(
                 pool.imap_unordered(crops_for, todo, chunksize=2), 1):
-            errors += bool(err)
+            if err:
+                errors += 1
+                if errors <= 5:  # show the reason, not just a count
+                    log(f"  error on {vid}: {err[:400]}")
+                if errors == k >= 50:
+                    raise SystemExit(f"the first {k} videos all failed, so the setup is broken; "
+                                     f"last error: {err[:400]}")
             if crops_dir is not None:
                 d = crops_dir / vid
                 d.mkdir(parents=True, exist_ok=True)

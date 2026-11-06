@@ -310,3 +310,35 @@ def test_ship_applies_the_docs12_rules(tmp_path):
         _ship(tmp_path, [True, True, True, False, True], True)                           # gate 2 fails
     with pytest.raises(SystemExit, match="different bundle"):
         _ship(tmp_path, [True, True, True, True, True], True, same_file=False)
+
+
+def test_failed_videos_are_extracted_again(tmp_path):
+    """Colab run 1 (2026-11-07): every video failed; a rerun must redo them,
+    not skip them as done."""
+    import train_faceswap as tf
+
+    for b in ("b1", "b2"):
+        (tmp_path / b).mkdir()
+        np.savez(tmp_path / b / "ok.npz", cls=np.zeros((4, 2), np.float16), error="")
+        np.savez(tmp_path / b / "bad.npz", cls=np.zeros((0, 1), np.float16), error="ValueError: boom")
+    assert tf.extracted(tmp_path, ["b1", "b2"], None, "ok")
+    assert not tf.extracted(tmp_path, ["b1", "b2"], None, "bad")
+    assert not tf.extracted(tmp_path, ["b1", "b2"], None, "missing")
+    (tmp_path / "crops" / "ok").mkdir(parents=True)
+    assert not tf.extracted(tmp_path, ["b1", "b2"], tmp_path / "crops", "ok")  # crops not saved yet
+    (tmp_path / "crops" / "ok" / "done").write_text("4")
+    assert tf.extracted(tmp_path, ["b1", "b2"], tmp_path / "crops", "ok")
+
+
+def test_training_script_replaces_a_notebook_plot_backend():
+    """Colab exports MPLBACKEND=module://matplotlib_inline...; MediaPipe
+    imports pyplot, which then fails in a venv without that module."""
+    import os
+    import subprocess
+
+    repo = Path(__file__).resolve().parents[1]
+    code = ("import sys, os; sys.path[:0] = ['scripts', 'src']; import train_faceswap; "
+            "print(os.environ['MPLBACKEND'])")
+    env = dict(os.environ, MPLBACKEND="module://matplotlib_inline.backend_inline")
+    out = subprocess.run([sys.executable, "-c", code], cwd=repo, env=env, capture_output=True, text=True, check=False)
+    assert out.returncode == 0 and out.stdout.strip() == "Agg", out.stderr[-500:]
