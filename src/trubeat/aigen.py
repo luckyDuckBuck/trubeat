@@ -44,11 +44,14 @@ DEFAULT_CONFIG: dict = {
     "min_duration_s": 2.0,
     "cache_dir": "data/processed/aigen_emb",
     # Title-card guard (docs/12 item A), inference only: a segment whose
-    # frames are mostly flat 8x8 blocks is a title card or graphic, and the
-    # first natural segment within graphics_search_s is scored instead.
+    # frames are mostly flat 8x8 blocks AND still (mean grey-level change
+    # between consecutive frames below graphics_max_motion) is a title card
+    # or graphic; the first natural segment within graphics_search_s is
+    # scored instead.
     "graphics_guard": True,
     "graphics_block_std": 4.0,
     "graphics_flat_frac": 0.7,
+    "graphics_max_motion": 0.5,
     "graphics_search_s": 30.0,
 }
 
@@ -241,11 +244,19 @@ def flat_fraction(frame: np.ndarray, block_std: float) -> float:
     return float((b.std(axis=1) < block_std).mean())
 
 
+def segment_motion(segment: np.ndarray) -> float:
+    """Mean absolute grey-level change between consecutive frames."""
+    g = segment.astype(np.float32).mean(axis=3)
+    return float(np.abs(np.diff(g, axis=0)).mean()) if len(g) > 1 else 0.0
+
+
 def is_graphic(segment: np.ndarray, config: dict | None = None) -> bool:
-    """A title card / graphic: most of each frame is flat (docs/12 item A)."""
+    """A title card / graphic: most of each frame is flat, and the frames
+    are still (docs/12 item A; flatness alone also caught smooth AI scenes)."""
     cfg = merged_config(config)
     fr = [flat_fraction(f, float(cfg["graphics_block_std"])) for f in segment]
-    return float(np.median(fr)) >= float(cfg["graphics_flat_frac"])
+    return (float(np.median(fr)) >= float(cfg["graphics_flat_frac"])
+            and segment_motion(segment) < float(cfg["graphics_max_motion"]))
 
 
 def guarded_segments(path: str | Path, config: dict | None = None) -> tuple[np.ndarray, dict]:

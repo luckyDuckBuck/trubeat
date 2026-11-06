@@ -173,7 +173,11 @@ also be **still**, mean absolute grey-level change between consecutive
 sampled frames < **0.5** (the end cards measure 0.00–0.23; the 119
 flagged pool clips have median 2.6, lower quartile 1.15). Same rule for
 the re-check: adopt only if < 0.5% of all 8,655 first segments are
-flagged.
+flagged. **Re-check: 15 / 8,655 = 0.17% [0.11, 0.29] flagged (0 of 2,492
+reals); adopted.** Held-out AI-video numbers with the guard: recall
+id 52.2% → 52.2%, ood 83.1% → 82.9%, wild 54.7% → 54.7%; GenBuster-real
+false alarms 5.4% → 5.4%. The RepresentUs end cards are still all four
+flagged, and nothing else in that clip.
 
 ## 7. Order of work
 

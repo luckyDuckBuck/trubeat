@@ -327,3 +327,17 @@ def test_guard_leaves_natural_video_alone(tmp_path):
     p = _write(tmp_path / "v.mp4", [_texture(i) for i in range(40)])
     _, meta = aigen.guarded_segments(p, aigen.merged_config({"img_size": 64, "max_segments": 1, "cache_dir": None}))
     assert meta["n_graphic_skipped"] == 0 and meta["segment_starts_s"] == [0.0]
+
+
+def test_flat_but_moving_scene_is_not_a_title_card():
+    """docs/12 item A revision: smooth AI scenes are flat too, but they move."""
+    cfg = aigen.merged_config({"img_size": 64})
+    frames = []
+    for k in range(8):  # a dark flat field with a bright bar sliding across
+        f = np.full((240, 320, 3), 20, np.uint8)
+        f[:, 40 * k:40 * k + 40] = 230
+        frames.append(f)
+    seg = np.stack(frames)
+    assert aigen.flat_fraction(seg[0], 4.0) > 0.7  # flat ...
+    assert aigen.segment_motion(seg) > 0.5          # ... but moving
+    assert not aigen.is_graphic(seg, cfg)
