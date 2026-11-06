@@ -488,8 +488,42 @@ extension needs a browser session (human). E1 deviates as noted in §9.1.
 
 ### 9.5 Robustness through the app path
 
-Pending: `python scripts/train_aigen.py --robustness-only` →
-`reports/aigen_robustness.md` (running at the time of writing).
+`python scripts/train_aigen.py --robustness-only` re-encodes a fixed subset
+of external clips (up to 40 AI clips per generator; 200 GenBuster reals and
+the 135 FF++ test reals), then sends each through the app's own 360p CRF 28
+normalisation, with the threshold fixed. Shipped model (v2):
+`reports/aigen_robustness_v2.md`; v1, on a smaller AI subset (20 per
+generator): `reports/aigen_robustness.md`.
+
+| condition (v2, fixed threshold +1.11) | GenBuster real FPR (n=200) | FF++ real (n=135) | recall id / ood / wild | AUC wild |
+|---|---|---|---|---|
+| app path as trained (360p, CRF 28) | 5.5% | 0 | 44% / 83% / 55% | 0.878 |
+| real clips downscaled to 480p first | 4.5% | 0 | 42% / 82% / 51% | 0.877 |
+| AI clips upscaled to 1080p first | 5.0% | 0 | 44% / 83% / 53% | 0.878 |
+| tab-capture-like (VP9 WebM, 720p, 2.5 Mb/s) | 5.5% | 0 | 42% / 82% / 53% | 0.878 |
+| harsh re-encode (240p, CRF 35) | 3.5% | 0 | 29% / 62% / 35% | 0.837 |
+| as-is (no ffmpeg on the machine) | 5.5% | 0 | 53% / 86% / 63% | 0.899 |
+
+What this says:
+
+- **R2-1, the resolution shortcut, is not supported.** Shrinking real clips
+  to 480p does not raise false alarms (5.5% → 4.5%), and enlarging AI clips
+  to 1080p does not hide them (wild 55% → 53%, ood 83% → 83%). v1 behaved the
+  same (FPR 4.5% → 4.0%; wild 45% → 45%). The 360p re-encode appears to erase
+  the format gap the metadata audit found. A 200-clip FPR has a wide interval
+  (5.5% is [3.1, 9.6]), so a change of 1–2 points is within noise.
+- **The extension's capture path is safe** (simulated): VP9 at 720p and
+  2.5 Mb/s moves recall by at most 2 points and false alarms not at all. A
+  real browser capture is still P7.
+- **Heavy compression is the weak point, and it fails towards "real".** At
+  240p CRF 35 (a re-shared, re-compressed clip), recall falls by about a
+  third on every tier (wild 55% → 35%), while false alarms fall too
+  (5.5% → 3.5%). Badly compressed AI clips will be missed more often, not
+  flagged wrongly more often.
+- Without ffmpeg the app scores the raw file: recall is higher and false
+  alarms are unchanged on this subset, but the scores drift up (median real
+  −1.85 → −1.60), so the measured operating point does not strictly apply.
+  The app flags that case with `W_NO_FFMPEG`.
 
 ### 9.6 Round-2 plan
 
@@ -497,7 +531,7 @@ Pending: `python scripts/train_aigen.py --robustness-only` →
 |---|---|---|---|
 | P1 | **Your labelled set** (human gate 2): put clips in `data/raw/user_eval/ai/` and `data/raw/user_eval/real/`, run `python scripts/eval_user_set.py` | the only test of "does it work on my videos"; every number above is on curated sets | `reports/user_eval.md` with inconclusive rate, catches and false alarms, each with a CI |
 | P2 | Multi-segment scoring: average up to 3 segment scores, threshold recalibrated on out-of-fold pool reals scored the same way | a long clip is judged on its first 2 s today | external recall at ≤ 6% GenBuster FPR is no worse on any tier; adopt only then |
-| P3 | Newest generators (45% caught): training clips from Veo 3, Sora 2, Kling 2.x, Seedance, Hailuo. GenBuster wild (150 clips) is the only held-out set for them, so it cannot also be training data | the biggest recall gap, and these are what people share now | a second public set of current-generator clips found (licence checked) or generated on your accounts (gate 5) |
+| P3 | Newest generators (45% caught; 55% after the §9.7 retrain, shipped): training clips from Veo 3, Sora 2, Kling 2.x, Seedance, Hailuo. GenBuster wild (150 clips) is the only held-out set for them, so it cannot also be training data | the biggest recall gap, and these are what people share now | a second public set of current-generator clips found (licence checked) or generated on your accounts (gate 5) |
 | P4 | More kinds of real video in the pool: phone footage, social re-uploads, low-light, screen recordings (licence-clean sources) | false alarms are measured only on OpenVid-style and FF++ footage; R2-1 shows how narrow the pool's reals are | FPR reported per real-video kind |
 | P5 | A real face-swap detector (frame-level CNN on FF++ c23 faces, trained on a free GPU notebook, gate 5c), replacing G2 at its strict threshold | today's check catches ~24% of Deepfakes swaps and is blind to reenactment | FF++ test AUC per family with CIs, and a Celeb-DF v2 cross-check (gate 6) |
 | P6 | A larger frozen backbone (DINOv2-B or CLIP ViT-L/14) for the AI layer, embeddings computed once on a notebook GPU | linear probes on the small backbone plateau at 0.81 leave-one-family-out | macro LOGO AUC +0.03 or better at < 10 s CPU inference for a 10 s clip |
@@ -529,6 +563,46 @@ Adopt the retrained model ("v2") over the shipped one only if all hold:
 
 Otherwise the shipped model stays, and the result is recorded here.
 
+**Result (2026-11-01 14:20, `scripts/compare_aigen_models.py` →
+`reports/aigen_v2_decision.md`): all rules pass; v2 adopted and shipped
+(`b69e763`).** 1,492 Rapidata clips (14 generator labels) joined the pool;
+v2's threshold from out-of-fold pool reals is +1.1149.
+
+| rule | v2 | shipped (v1) | pass |
+|---|---|---|---|
+| GenBuster-real FPR ≤ 7.3% | 54/1000 = 5.4% [4.2, 7.0] | 5.7% | yes |
+| FF++ c23 test reals flagged ≤ 2 | 0/135 | 0/135 | yes |
+| wild recall ≥ v1 + 5 points | 54.7% [46.7, 62.4] | 45.3% | yes |
+| no tier drops > 3 points | id 52.2%, ood 83.1% | id 49.9%, ood 78.3% | yes |
+| LOGO macro, original 17 families ≥ v1 − 0.01 | 0.819 | 0.809 | yes |
+
+Checks on the result, run after the decision and not used for it:
+
+- **Is the wild gain only Veo 3.1 being in training?** No. Without the 10
+  GenBuster Veo 3.1 clips, wild recall is 44.3% → 52.9% (n = 140). On the
+  two wild families with no version in v2's pool (Hailuo 2.3, PixVerse V5;
+  n = 30) it is 46.7% → 56.7% (too few clips for a firm claim).
+- **Near-duplicates between Rapidata and GenBuster?** None: 0/150 wild clips
+  have a pool clip at cosine ≥ 0.97 (`reports/aigen_audit_v2.md`). The other
+  counts are unchanged from v1 (54 ood AI clips, 8 reals), so the Rapidata
+  clips added no near-duplicates.
+- **Unseen-family AUC** (pool leave-one-family-out, all 21 families of v2):
+  macro 0.841; the open-source tail stays weak (LTX 0.54, SEINE 0.55,
+  Pyramid-Flow 0.62, SVD 0.67, EasyAnimate 0.68). New families held out
+  whole: Veo 0.94, Seedance 0.93, Marey 0.92, Mochi 0.96.
+- **Live app** (`trubeat serve`, driven through its API): the GenBuster
+  Veo 3.1 clip v1 missed (+1.03) is now flagged (+1.20 ≥ +1.11); a GenBuster
+  real (−3.27) and FF++ 000 (−2.98) stay real; the iStock clip is still
+  decided by the face-swap check (AI score −1.97, 28th percentile of reals).
+- Labels in the per-generator table of the decision report: Kling 2.6,
+  Sora 2, Seedance 1.5/2.0 and Wan 2.5/2.6 have an *earlier version* of
+  their family in v2's pool; the report first called them unseen (fixed,
+  `0c786be`).
+
+The report's generator count ("38 generators") counts each mode and
+version label (`wan`, `wan2.1`, `wan2.1_t2v`); the caveat says 21
+generator families instead.
+
 ## 10. Progress log
 
 Commits on `main` (local; not pushed), oldest first, from the approval of
@@ -536,4 +610,13 @@ this plan: A2 `af28d3e`, A3 `a600fe9`, A4 `84f975e`, A5 `03025c5`, A6
 `918b690`, B2 `04fe895`, D1/D3 `6c38a44`, D2/D4/D5 `24eabc4`, D3/D6
 `c5b9528`, C/E1 `efb190c`, E2/E3 `ec90fc0`, F-1 tooling `a6d0d29`, LOGO by
 family `62a34ac`, review fixes `c7a7a96`, round-2 audit script `0c9cbec`,
-shipped detector `9e885cf`, coverage warnings `ba8fe4c`.
+shipped detector `9e885cf`, coverage warnings `ba8fe4c`, robustness via the
+app path `0f82674`, descriptor search `5e79932`, Rapidata download and the
+§9.7 check `1c5eddb`, Rapidata tests `3e7f3c0`, docs/04 warning table
+`053f301`, decision-report family labels `0c786be`, v2 shipped `b69e763`.
+
+Not finished: P2 (multi-segment scoring). `scripts/eval_multiseg.py` was
+embedding segments 2–3 for the 8,655 clips (0.7 clips/s, about 3.5 h of
+CPU) when the session ended at clip 671; the per-clip cache under
+`data/processed/aigen_emb_multiseg/` keeps that progress. The script stays
+uncommitted until it has run end to end.

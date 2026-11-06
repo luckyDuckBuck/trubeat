@@ -166,9 +166,11 @@ clips of current generators added) flags 5.4% [4.2, 7.0] of real clips and
 0/135 FF++ real test clips. It catches 83% [81, 85] of 2024-era commercial
 generators (Sora, Kling, Gen-3, Luma, Pika), 55% [47, 62] of the newest
 (Veo 3.1, Sora 2, Kling 2.6) and 52% [49, 55] of open-source ones. Clips
-under 2 s are not checked. A hard re-encode (240p, CRF 35) cuts the newest-
-generator catch rate roughly in half (docs/11 §9.5). It does not detect face-swaps. The round-2
-audit and the next steps are in `docs/11` §9.
+under 2 s are not checked. A hard re-encode (240p, CRF 35) lowers the
+newest-generator catch rate from 55% to 35% without adding false alarms;
+tab capture and resolution changes barely move it (docs/11 §9.5). It does
+not detect face-swaps. The round-2 audit and the next steps are in
+`docs/11` §9.
 
 Human gates (env, dataset forms/downloads, ROI glance, gate reviews) are
 collected in `reports/HUMAN_GATES.md`.
