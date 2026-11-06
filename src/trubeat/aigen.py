@@ -298,21 +298,36 @@ def _hub_repo(backbone: str) -> str:
     return f"timm/{backbone}"
 
 
+# timm's hub repos hold model.safetensors; the CLIP ones (e.g.
+# vit_base_patch16_clip_224.openai) hold only pytorch_model.bin, which is
+# what timm itself falls back to. Same order as timm.
+_WEIGHT_FILES = ("model.safetensors", "pytorch_model.bin")
+
+
 def cached_weights(backbone: str) -> str | None:
     """Path of the backbone's weights in the local Hugging Face cache, or
     None. A pure cache lookup: no network."""
     from huggingface_hub import try_to_load_from_cache
 
-    hit = try_to_load_from_cache(_hub_repo(backbone), "model.safetensors")
-    return hit if isinstance(hit, str) else None
+    for name in _WEIGHT_FILES:
+        hit = try_to_load_from_cache(_hub_repo(backbone), name)
+        if isinstance(hit, str):
+            return hit
+    return None
 
 
 def fetch_weights(backbone: str = DEFAULT_CONFIG["backbone"]) -> str:
     """Download the backbone weights into the local cache (explicit,
     user-initiated; the analysis path itself never downloads)."""
     from huggingface_hub import hf_hub_download
+    from huggingface_hub.errors import EntryNotFoundError
 
-    return hf_hub_download(_hub_repo(backbone), "model.safetensors")
+    for name in _WEIGHT_FILES[:-1]:
+        try:
+            return hf_hub_download(_hub_repo(backbone), name)
+        except EntryNotFoundError:
+            continue
+    return hf_hub_download(_hub_repo(backbone), _WEIGHT_FILES[-1])
 
 
 class Embedder:

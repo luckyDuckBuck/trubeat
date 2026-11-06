@@ -269,7 +269,8 @@ def cmd_extract(a) -> None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
     embedders = {b: fs.FaceEmbedder(b, "cls+patch", int(cfg["torch_threads"]), device=device,
                                     img_size=int(cfg["crop_size"])) for b in a.backbones}
-    for b in a.backbones:
+    for b, e in embedders.items():  # load every backbone now: a missing one stops here, not mid-run
+        log(f"{b}: {e.dim}-dim features")
         (out / b).mkdir(parents=True, exist_ok=True)
     crops_dir = Path(a.save_crops) if a.save_crops else None
 
