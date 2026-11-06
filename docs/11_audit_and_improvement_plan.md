@@ -530,7 +530,7 @@ What this says:
 | # | what | why | done when |
 |---|---|---|---|
 | P1 | **Your labelled set** (human gate 2): put clips in `data/raw/user_eval/ai/` and `data/raw/user_eval/real/`, run `python scripts/eval_user_set.py` | the only test of "does it work on my videos"; every number above is on curated sets | `reports/user_eval.md` with inconclusive rate, catches and false alarms, each with a CI |
-| P2 | Multi-segment scoring: average up to 3 segment scores, threshold recalibrated on out-of-fold pool reals scored the same way | a long clip is judged on its first 2 s today | external recall at ≤ 6% GenBuster FPR is no worse on any tier; adopt only then |
+| P2 | **Tested, not adopted (§9.8).** Multi-segment scoring: average up to 3 segment scores, threshold recalibrated on out-of-fold pool reals scored the same way | a long clip is judged on its first 2 s today | external recall at ≤ 6% GenBuster FPR is no worse on any tier; adopt only then |
 | P3 | Newest generators (45% caught; 55% after the §9.7 retrain, shipped): training clips from Veo 3, Sora 2, Kling 2.x, Seedance, Hailuo. GenBuster wild (150 clips) is the only held-out set for them, so it cannot also be training data | the biggest recall gap, and these are what people share now | a second public set of current-generator clips found (licence checked) or generated on your accounts (gate 5) |
 | P4 | More kinds of real video in the pool: phone footage, social re-uploads, low-light, screen recordings (licence-clean sources) | false alarms are measured only on OpenVid-style and FF++ footage; R2-1 shows how narrow the pool's reals are | FPR reported per real-video kind |
 | P5 | A real face-swap detector (frame-level CNN on FF++ c23 faces, trained on a free GPU notebook, gate 5c), replacing G2 at its strict threshold | today's check catches ~24% of Deepfakes swaps and is blind to reenactment | FF++ test AUC per family with CIs, and a Celeb-DF v2 cross-check (gate 6) |
@@ -603,9 +603,48 @@ The report's generator count ("38 generators") counts each mode and
 version label (`wan`, `wan2.1`, `wan2.1_t2v`); the caveat says 21
 generator families instead.
 
+### 9.8 P2 result: whole-clip scoring tested, not adopted
+
+`scripts/eval_multiseg.py` → `reports/aigen_multiseg.md` (2026-11-06).
+Each clip's 2 s segments, up to 3 spread evenly over the clip, were embedded
+(segment 0 is the one the shipped model was trained on; a cosine check
+confirmed it re-embeds identically). Three descriptors, all with the
+shipped recipe:
+`first` (the shipped model: segment 0 only), `avg` (trained on segment 0,
+scored on the mean of all segments = the average of segment scores) and
+`avg-train` (trained and scored on the mean). Rule fixed in the script
+before the run: pick `avg` or `avg-train` by pool leave-one-family-out AUC;
+adopt it only if that AUC ≥ `first`'s, GenBuster-real FPR ≤ 6% (§9.6 P2),
+every GenBuster tier's recall ≥ `first`'s, and FF++ test reals flagged ≤ 2.
+
+| | first (shipped) | avg | avg-train |
+|---|---|---|---|
+| pool LOGO macro AUC (21 families) | 0.841 | **0.845** | 0.845 |
+| threshold (OOF pool reals, 5%) | +1.115 | +1.037 | +0.968 |
+| GenBuster-real FPR | 5.4% | 5.0% | 6.0% |
+| recall id / ood / wild | 52.2 / 83.1 / **54.7%** | 53.4 / 84.0 / 54.0% | 55.6 / 86.4 / 52.7% |
+| AUC id / ood / wild | 0.880 / 0.961 / 0.880 | 0.886 / 0.964 / 0.886 | 0.883 / 0.963 / 0.875 |
+| FF++ test reals flagged | 0/135 | 0/135 | 0/135 |
+
+`avg` won on the pool and passed every gate but one: wild recall 81/150
+against 82/150. The rule required no tier to get worse, so **the shipped
+model keeps scoring the first 2 s** (`W_PARTIAL_COVERAGE` says so). The gap
+is one clip and well inside the interval, so this is not evidence that
+whole-clip scoring hurts; it is evidence that it does not clearly help.
+Changing the rule after seeing the numbers is what the rule exists to
+prevent. A retest needs a rule with an explicit tolerance and a fresh
+held-out set.
+
+Notes: segments per clip, all clips: 1 segment 1,155, 2 segments 5,856,
+3 segments 1,644. Real clips run longer (36% of reals have 3 segments vs
+12% of AI clips), so segment count tracks the label; `avg` describes every
+clip as a mean, so a 3-segment clip is a less noisy mean, not a different
+kind of input. 55 of 8,655 clips could not be decoded at 3 segments and
+were dropped from all three variants alike.
+
 ## 10. Progress log
 
-Commits on `main` (local; not pushed), oldest first, from the approval of
+Commits on `main`, oldest first, from the approval of
 this plan: A2 `af28d3e`, A3 `a600fe9`, A4 `84f975e`, A5 `03025c5`, A6
 `918b690`, B2 `04fe895`, D1/D3 `6c38a44`, D2/D4/D5 `24eabc4`, D3/D6
 `c5b9528`, C/E1 `efb190c`, E2/E3 `ec90fc0`, F-1 tooling `a6d0d29`, LOGO by
@@ -613,10 +652,9 @@ family `62a34ac`, review fixes `c7a7a96`, round-2 audit script `0c9cbec`,
 shipped detector `9e885cf`, coverage warnings `ba8fe4c`, robustness via the
 app path `0f82674`, descriptor search `5e79932`, Rapidata download and the
 §9.7 check `1c5eddb`, Rapidata tests `3e7f3c0`, docs/04 warning table
-`053f301`, decision-report family labels `0c786be`, v2 shipped `b69e763`.
+`053f301`, decision-report family labels `0c786be`, v2 shipped `b69e763`, robustness
+and v2 docs `b358a32`, website workflow note `0ba218b`, missing-extra error
+`ea821a5`, P2 result (the commit that adds `scripts/eval_multiseg.py`).
 
-Not finished: P2 (multi-segment scoring). `scripts/eval_multiseg.py` was
-embedding segments 2–3 for the 8,655 clips (0.7 clips/s, about 3.5 h of
-CPU) when the session ended at clip 671; the per-clip cache under
-`data/processed/aigen_emb_multiseg/` keeps that progress. The script stays
-uncommitted until it has run end to end.
+P2 (multi-segment scoring) ran end to end on 2026-11-06 and was not
+adopted (§9.8); `scripts/eval_multiseg.py` is committed with its result.
