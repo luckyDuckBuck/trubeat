@@ -249,8 +249,15 @@ class Embedder:
         self._std = None
 
     def _load(self) -> None:
-        import timm
-        import torch
+        try:
+            import timm
+            import torch
+        except ImportError as exc:  # the [aigen] extra is optional
+            raise ModelMissing(
+                f"the AI-video detector needs PyTorch and timm ({exc.name} is not "
+                "installed): install the CPU build of torch, then "
+                '`pip install -e ".[aigen]"`, then run `trubeat fetch-models` once'
+            ) from exc
 
         torch.set_num_threads(int(self.cfg["torch_threads"]))
         weights = cached_weights(self.cfg["backbone"])

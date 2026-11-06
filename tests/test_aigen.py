@@ -250,6 +250,20 @@ def test_missing_weights_raise_model_missing_not_a_download(monkeypatch):
     assert "trubeat fetch-models" in str(exc.value)
 
 
+def test_missing_aigen_extra_raises_model_missing_with_install_steps(monkeypatch):
+    """Without the optional [aigen] extra (as in CI), the app must say how to
+    install the detector, not report a raw ModuleNotFoundError as a failure."""
+    import sys
+
+    from trubeat.errors import ModelMissing
+
+    monkeypatch.setitem(sys.modules, "timm", None)  # import timm -> ImportError
+    with pytest.raises(ModelMissing) as exc:
+        aigen.Embedder()._load()
+    assert exc.value.code == "E_MODEL_MISSING"
+    assert '.[aigen]' in str(exc.value) and "trubeat fetch-models" in str(exc.value)
+
+
 def test_find_bundle_returns_none_when_absent(tmp_path, monkeypatch):
     monkeypatch.setattr(aigen, "BUNDLE_SEARCH_PATHS", [tmp_path / "nope.joblib"])
     assert aigen.find_bundle() is None
