@@ -116,7 +116,7 @@ the current tab and overlays the verdict on the page.
 Prefer a download? Grab the packaged zip from the releases page — the
 stable link, always the latest build:
 
-<https://github.com/tripathiayushman/trubeat/releases/latest/download/trubeat-extension.zip>
+<https://github.com/luckyDuckBuck/trubeat/releases/latest/download/trubeat-extension.zip>
 
 It captures ~20 s of the tab, uploads it to **your** backend, and renders
 the three-state verdict with the evidence numbers. It never computes a

@@ -72,8 +72,8 @@ is the task list — take the topmost unfinished item, finish it, commit, repeat
 
 - One commit per finished backlog item. Conventional messages:
   `feat:`, `fix:`, `test:`, `docs:`, `chore:`.
-- 2026-10-18 (human-approved): push directly to `origin/main` (= upstream
-  `tripathiayushman/trubeat`). No fork round-trip, no PRs for routine work.
+- 2026-10-18 (human-approved): push directly to `origin/main` (= upstream, in the luckyDuckBuck organization since 2026-11-06:
+  `luckyDuckBuck/trubeat`). No fork round-trip, no PRs for routine work.
   Conventional, small, honest commits — one per finished task. Phase-gate
   reports still go through human review (§9) before the next phase starts.
 - 2026-11-06 (human-requested): the website (`tripathiayushman/trubeat-website`,

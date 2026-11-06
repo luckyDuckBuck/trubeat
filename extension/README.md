@@ -54,9 +54,9 @@ The caveat is always on screen:
 
 2. Get the extension folder:
    - **Download the packaged zip** (recommended):
-     <https://github.com/tripathiayushman/trubeat/releases/latest/download/trubeat-extension.zip>: unzip it to get an `extension/` folder; or
+     <https://github.com/luckyDuckBuck/trubeat/releases/latest/download/trubeat-extension.zip>: unzip it to get an `extension/` folder; or
    - work from a checkout: the folder is [`extension/`](./) in the
-     [tool repository](https://github.com/tripathiayushman/trubeat).
+     [tool repository](https://github.com/luckyDuckBuck/trubeat).
 
 3. Load it:
    - open `chrome://extensions`

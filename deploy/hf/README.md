@@ -37,4 +37,4 @@ ephemeral storage (HF Spaces wipe non-persistent storage on restart), and
 are never used for training. For anything sensitive run the tool locally:
 `pip install -e ".[serving]" && trubeat serve`.
 
-Tool source: <https://github.com/tripathiayushman/trubeat>
+Tool source: <https://github.com/luckyDuckBuck/trubeat>
