@@ -244,7 +244,12 @@ def base_family(generator: str) -> str:
                # Rapidata names (scripts/download_rapidata.py)
                "gen3-alpha": "runway", "ray2": "luma", "pika2.2": "pika", "veo2": "veo",
                "veo3": "veo", "veo3.1": "veo", "hunyuan": "hunyuanvideo", "mochi-1": "mochi",
-               "seedance-1-pro": "seedance", "kling-v2.1-master": "kling"}
+               "seedance-1-pro": "seedance", "kling-v2.1-master": "kling",
+               # GenBuster wild names (external only; used to label which
+               # external generators have an earlier version in training)
+               "hailuo2.3": "hailuo", "kling2.5_turbo": "kling", "kling2.6": "kling",
+               "pixverse_v5": "pixverse", "seedance1.5_pro": "seedance",
+               "seedance2.0": "seedance", "sora2": "sora", "wan2.5": "wan", "wan2.6": "wan"}
     return aliases.get(g, g)
 
 

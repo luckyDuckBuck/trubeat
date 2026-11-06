@@ -46,3 +46,15 @@ def test_every_rapidata_generator_has_a_holdout_family():
                      ("pika2.2", "pika"), ("hunyuan", "hunyuanvideo"), ("kling-v2.1-master", "kling"),
                      ("seedance-1-pro", "seedance"), ("mochi-1", "mochi"), ("wan2.1", "wan")):
         assert ta.base_family(gen) == fam
+
+
+def test_genbuster_wild_versions_map_to_their_family():
+    """The v2 decision report's 'family in training?' column must not call
+    Kling 2.6 or Sora 2 unseen when Kling and Sora clips are in training."""
+    import train_aigen as ta
+
+    for gen, fam in (("kling2.6", "kling"), ("kling2.5_turbo", "kling"), ("sora2", "sora"),
+                     ("seedance2.0", "seedance"), ("seedance1.5_pro", "seedance"),
+                     ("wan2.5", "wan"), ("wan2.6", "wan"), ("hailuo2.3", "hailuo"),
+                     ("pixverse_v5", "pixverse")):
+        assert ta.base_family(gen) == fam
