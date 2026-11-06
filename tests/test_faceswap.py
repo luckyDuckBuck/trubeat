@@ -182,3 +182,46 @@ def test_gates_need_every_swap_family():
     g = {name.split(" on ")[-1] if " on " in name else name[:2]: ok for name, ok, _ in tf.gates(m)}
     assert g["Deepfakes"] and g["FaceSwap"] and g["FaceShifter"] is False
     assert g["2."] is True and g["3."] is True and g["4."] is None
+
+
+def test_cnn_bundle_scores_crops_and_checks_its_weights(tmp_path, monkeypatch):
+    """Stage 2: a CNN bundle scores each crop; weights are found locally
+    and fetch_cnn_weights verifies the SHA-256 (file:// stands in for the
+    release URL)."""
+    pytest.importorskip("timm")
+    pytest.importorskip("safetensors")
+    import hashlib
+
+    import timm
+    from safetensors.torch import save_file
+
+    m = timm.create_model("efficientnet_b0", pretrained=False, num_classes=1)
+    src = tmp_path / "src" / "w.safetensors"
+    src.parent.mkdir()
+    save_file({k: v.contiguous() for k, v in m.state_dict().items()}, str(src))
+    sha = hashlib.sha256(src.read_bytes()).hexdigest()
+    bundle = {"kind": "cnn", "threshold": 0.0, "real_reference_scores": np.zeros(3),
+              "config": {"n_frames": 6, "min_faces": 4, "crop_size": 64},
+              "cnn": {"arch": "efficientnet_b0", "file": "w.safetensors", "sha256": sha,
+                      "url": src.as_uri(), "mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]}}
+    monkeypatch.setattr(fs.Path, "home", staticmethod(lambda: tmp_path / "home"))
+    monkeypatch.setattr(fs, "model_dirs", lambda: [tmp_path / "home" / ".cache" / "trubeat"])
+    assert fs.cnn_weights_path("w.safetensors") is None
+    got = fs.fetch_cnn_weights(bundle)
+    assert got.is_file() and fs.cnn_weights_path("w.safetensors") == got
+    p = synth.write_pulse_video(tmp_path / "v.mp4", fps=30.0, duration_s=3.0)
+    r = fs.analyze(p, bundle, finder=_StubFinder(found=6))
+    assert r.label in ("swap", "no_swap") and r.n_faces == 6 and np.isfinite(r.score)
+
+
+def test_cnn_weights_with_a_wrong_hash_are_refused(tmp_path, monkeypatch):
+    from trubeat.errors import ModelMissing
+
+    src = tmp_path / "w.safetensors"
+    src.write_bytes(b"not the weights")
+    monkeypatch.setattr(fs.Path, "home", staticmethod(lambda: tmp_path / "home"))
+    monkeypatch.setattr(fs, "model_dirs", lambda: [tmp_path / "home" / ".cache" / "trubeat"])
+    bundle = {"cnn": {"file": "w.safetensors", "url": src.as_uri(), "sha256": "0" * 64}}
+    with pytest.raises(ModelMissing):
+        fs.fetch_cnn_weights(bundle)
+    assert fs.cnn_weights_path("w.safetensors") is None
