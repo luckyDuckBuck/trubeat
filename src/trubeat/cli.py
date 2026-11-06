@@ -165,10 +165,26 @@ def cmd_aigen(args):
 
 
 def cmd_fetch_models(args):
-    from . import aigen
+    """Download the backbone weights the installed bundles need (the only
+    network step): the AI-video detector's and, when a face-swap bundle is
+    installed, its backbone too. ``--backbone`` fetches just that one."""
+    from . import aigen, faceswap
 
-    path = aigen.fetch_weights(args.backbone)
-    print(json.dumps({"fetched": args.backbone, "path": path}))
+    wanted = [args.backbone] if args.backbone else []
+    if not wanted:
+        ai = aigen.find_bundle()
+        wanted.append(ai["config"]["backbone"] if ai else aigen.DEFAULT_CONFIG["backbone"])
+        fsb = faceswap.load_bundle()
+        if fsb is not None and fsb.get("kind") != "cnn":
+            wanted.append(fsb["config"]["backbone"])
+    out = {}
+    for b in dict.fromkeys(wanted):
+        out[b] = aigen.fetch_weights(b)
+    if not args.backbone:
+        fsb = faceswap.load_bundle()
+        if fsb is not None and fsb.get("kind") == "cnn":
+            out[fsb["cnn"]["file"]] = str(faceswap.fetch_cnn_weights(fsb))
+    print(json.dumps({"fetched": out}))
 
 
 def main() -> None:
@@ -203,8 +219,9 @@ def main() -> None:
                     help="AI-video bundle (default: models/, data/models/, then the packaged copy)")
 
     fm = sub.add_parser("fetch-models",
-                        help="download the AI-video backbone weights once (the only network step)")
-    fm.add_argument("--backbone", default="vit_small_patch14_dinov2.lvd142m")
+                        help="download the detectors' backbone weights once (the only network step)")
+    fm.add_argument("--backbone", default=None,
+                    help="fetch only this backbone (default: every backbone the installed bundles use)")
 
     s = sub.add_parser("serve", help="run the TrueBeat web app (Gradio)")
     s.add_argument("--port", type=int, default=7860)

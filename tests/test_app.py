@@ -98,7 +98,7 @@ def test_unverified_provenance_still_decides_but_says_so():
 def test_faceswap_boundary_is_inclusive():
     at = verdict_for(_analysis(detector_score=THR.faceswap_threshold), THR)
     above = verdict_for(_analysis(detector_score=THR.faceswap_threshold + 1e-9), THR)
-    assert at.verdict == "fake" and at.decided_by == "face_swap"
+    assert at.verdict == "fake" and at.decided_by == "pulse"  # no face-swap detector ran
     assert at.headline == "Possible face-swap"
     assert "weak" in at.detail
     assert above.verdict == "real"
@@ -118,7 +118,7 @@ def test_short_clip_still_gets_a_verdict_from_the_ai_detector():
         THR,
     )
     assert a.verdict == "real"
-    assert "face-swap check did not run" in a.detail
+    assert "No face-swap check could run" in a.detail
 
 
 def test_without_the_ai_detector_a_passing_faceswap_check_is_not_a_real_verdict():
@@ -284,7 +284,7 @@ def test_cli_exposes_serve():
 def test_evidence_table_explains_a_missing_score():
     """The face-swap row says *why* there is no score."""
     with_score = app_mod._evidence_text(_analysis(detector_score=-0.5))
-    assert "| face-swap check | score -0.50 (flags at <=" in with_score
+    assert "| face-swap check (pulse) | score -0.50 (flags at <=" in with_score
     assert ("| AI-video detector | score -1.00 (flags at >= +0.40); "
             "higher than 20% of real validation clips |") in with_score
     assert "(not reliable: pulse not measurable)" in with_score
@@ -401,3 +401,47 @@ def test_progress_plan_gives_short_clips_to_the_ai_layer():
         plan = app_mod._ProgressPlan(lambda f, s: None, Path("x.mp4"), ("provenance", "ai_video", "pulse"), 120.0)
     face_share = plan.spans["face"][1] - plan.spans["face"][0]
     assert 0.4 < face_share < 0.7  # face tracking is the long stage
+
+
+# ------------------------------------------------- face-swap detector (docs/12)
+
+def _fsd(label, score, mode="decisive", **kw):
+    return _analysis(fsd_available=label in ("swap", "no_swap"), fsd_label=label, fsd_score=score,
+                     fsd_threshold=0.5, fsd_mode=mode, fsd_real_percentile=0.99, fsd_n_faces=16,
+                     fsd_n_sampled=16, fsd_top_time_s=3.2, **kw)
+
+
+def test_decisive_face_swap_detector_flags_a_swap():
+    a = verdict_for(_fsd("swap", 1.4), THR)
+    assert a.verdict == "fake" and a.decided_by == "face_swap" and a.headline == "Possible face-swap"
+    assert "+1.40" in a.detail and "3.2 s" in a.detail and "about 3% of real faces" in a.detail
+
+
+def test_ai_video_detector_still_comes_first():
+    a = verdict_for(_fsd("swap", 1.4, ai_label="ai", ai_score=2.0, ai_threshold=1.1), THR)
+    assert a.decided_by == "ai_video"
+
+
+def test_evidence_only_detector_never_decides():
+    a = verdict_for(_fsd("swap", 1.4, mode="evidence"), THR)
+    assert a.verdict == "real" and a.decided_by == "ai_video"
+
+
+def test_decisive_detector_takes_over_from_the_pulse_check():
+    """Once the face-swap detector looked at the face, the weak pulse score
+    no longer decides (docs/12 §5 B)."""
+    a = verdict_for(_fsd("no_swap", -2.0, detector_score=-0.9), THR)
+    assert a.verdict == "real" and "face-swap detector also found no sign" in a.detail
+    b = verdict_for(_fsd("no_face", None, detector_score=-0.9), THR)  # no face found: pulse may decide
+    assert b.decided_by == "pulse"
+
+
+def test_json_api_leaves_out_the_face_image():
+    import json
+
+    import numpy as np
+
+    a = _fsd("swap", 1.4)
+    a.fsd_top_crop = np.zeros((8, 8, 3), np.uint8)
+    d = json.loads(verdict_for(a, THR).to_json())
+    assert "fsd_top_crop" not in d and d["fsd_score"] == 1.4 and d["decided_by"] == "face_swap"

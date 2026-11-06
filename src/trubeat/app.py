@@ -73,6 +73,9 @@ PROGRESS_COST_AI_S = 5.0
 PROGRESS_COST_DECODE_S_PER_FRAME = 0.011
 PROGRESS_COST_FACE_S_PER_FRAME = 0.018
 PROGRESS_COST_PULSE_S = 2.0
+# face-swap detector: 16 frames found + embedded, plus grabbing the frames between them
+PROGRESS_COST_FSD_S = 3.0
+PROGRESS_COST_FSD_S_PER_FRAME = 0.002
 
 ProgressFn = Callable[[float, str], None]
 
@@ -94,6 +97,8 @@ class _ProgressPlan:
         costs = {
             "provenance": 0.1,
             "ai_video": PROGRESS_COST_AI_S if "ai_video" in layers else 0.0,
+            "face_swap": (PROGRESS_COST_FSD_S + n_frames * PROGRESS_COST_FSD_S_PER_FRAME
+                          if "face_swap" in layers else 0.0),
             "decode": n_frames * PROGRESS_COST_DECODE_S_PER_FRAME if pulse else 0.0,
             "face": n_tracked * PROGRESS_COST_FACE_S_PER_FRAME,
             "pulse": PROGRESS_COST_PULSE_S if pulse else 0.0,
@@ -184,6 +189,17 @@ class PulseAnalysis:
     layers: dict = field(default_factory=dict)  # layer -> what happened
     decided_by: str = ""  # "provenance" | "ai_video" | "face_swap" | ""
     faceswap_threshold: float | None = None  # the threshold actually applied
+    # Face-swap detector (docs/12): face crops -> frozen backbone -> linear model
+    fsd_available: bool = False
+    fsd_mode: str = ""  # "decisive" | "evidence" (from the bundle, per docs/12 §6)
+    fsd_label: str = "unknown"  # "swap" | "no_swap" | "no_face" | "unknown"
+    fsd_score: float | None = None  # positive = face-swap
+    fsd_threshold: float | None = None
+    fsd_real_percentile: float | None = None
+    fsd_n_faces: int = 0
+    fsd_n_sampled: int = 0
+    fsd_top_time_s: float | None = None
+    fsd_top_crop: np.ndarray | None = field(default=None, repr=False, compare=False)
     warnings: list[str] = field(default_factory=list)
     roi_waveforms: list[list[float]] = field(default_factory=list)  # 3 x T
     waveform_names: list[str] = field(default_factory=list)
@@ -192,7 +208,9 @@ class PulseAnalysis:
     waveform_band_hz: list[float] = field(default_factory=lambda: [0.7, 3.0])
 
     def to_json(self) -> str:
-        return json.dumps(asdict(self), default=float)
+        d = asdict(self)
+        d.pop("fsd_top_crop", None)  # an image; the UI shows it, the JSON API does not carry it
+        return json.dumps(d, default=float)
 
 
 def _roi_names(config: dict) -> list[str]:
@@ -248,6 +266,37 @@ def load_aigen(path: Path | str | None = None):
     return _AIGEN_CACHE[key]
 
 
+_FS_CACHE: dict = {}
+
+
+def load_faceswap(path: Path | str | None = None):
+    """(bundle, FaceEmbedder, FaceFinder) for the face-swap layer, or Nones."""
+    from . import faceswap
+
+    key = str(path) if path else "<search>"
+    if key not in _FS_CACHE:
+        try:
+            bundle = faceswap.load_bundle(path)
+        except Exception as exc:  # noqa: BLE001 — a broken bundle must not break the app
+            print(f"warning: could not load face-swap bundle: {exc}")
+            bundle = None
+        if bundle is None:
+            _FS_CACHE[key] = (None, None, None)
+        else:
+            cfg = faceswap.merged_config(bundle["config"])
+            if bundle.get("kind") == "cnn":
+                try:
+                    emb = faceswap.CNNScorer.from_bundle(bundle)
+                except Exception as exc:  # noqa: BLE001 — weights not fetched: the layer says so
+                    print(f"warning: face-swap CNN not usable: {exc}")
+                    emb = None
+            else:
+                emb = faceswap.FaceEmbedder(cfg["backbone"], cfg["feature"], int(cfg["torch_threads"]),
+                                            img_size=int(cfg["crop_size"]))
+            _FS_CACHE[key] = (bundle, emb, faceswap.FaceFinder(cfg))
+    return _FS_CACHE[key]
+
+
 def analyze_video(
     video_path: str | Path,
     config: dict | None = None,
@@ -255,8 +304,9 @@ def analyze_video(
     thresholds: VerdictThresholds | None = None,
     max_seconds: float = MAX_ANALYSIS_SECONDS,
     aigen_path: Path | str | None = None,
-    layers: tuple[str, ...] = ("provenance", "ai_video", "pulse"),
+    layers: tuple[str, ...] = ("provenance", "ai_video", "face_swap", "pulse"),
     progress: ProgressFn | None = None,
+    faceswap_path: Path | str | None = None,
 ) -> PulseAnalysis:
     """Run every analysis layer on one video and fuse them (docs/11 E1).
 
@@ -282,6 +332,9 @@ def analyze_video(
     if "ai_video" in layers:
         bar("ai_video", 0.0, "AI-video detector: loading the model")
         _ai_video_layer(a, path, aigen_path, bar)
+    if "face_swap" in layers:
+        bar("face_swap", 0.0, "Face-swap detector: loading the model")
+        _face_swap_layer(a, path, faceswap_path, bar)
     if "pulse" in layers:
         bar("decode", 0.0, "Pulse: decoding the video")
         _pulse_layer(a, path, config, model_path, thr, max_seconds, bar)
@@ -339,6 +392,47 @@ def _ai_video_layer(a: PulseAnalysis, path: Path, aigen_path,
             f"(score {res.score:+.2f}, threshold {res.threshold:+.2f}, "
             f"{res.n_segments} segment{'s' if res.n_segments != 1 else ''})"
         )
+    if not a.duration_s and res.duration_s:
+        a.duration_s = float(res.duration_s)
+
+
+def _face_swap_layer(a: PulseAnalysis, path: Path, faceswap_path,
+                     bar: _ProgressPlan | None = None) -> None:
+    """The face-swap detector (docs/12): runs on any clip with a visible face."""
+    from . import faceswap
+    from .errors import ModelMissing
+
+    bundle, emb, finder = load_faceswap(faceswap_path)
+    if bundle is None:
+        a.layers["face_swap"] = "not available: no trained face-swap model installed"
+        return
+    try:
+        res = faceswap.analyze(
+            path, bundle, embedder=emb, finder=finder,
+            progress=(lambda f, s: bar("face_swap", f, f"Face-swap detector: {s}")) if bar else None,
+        )
+    except ModelMissing as exc:
+        a.layers["face_swap"] = f"not available: {exc}"
+        a.warnings.append(exc.code)
+        return
+    except Exception as exc:  # noqa: BLE001 — the app must not crash
+        a.layers["face_swap"] = f"failed: {type(exc).__name__}: {exc}"
+        a.warnings.append("W_FACESWAP_DETECTOR_FAILED")
+        return
+    a.fsd_mode = str(bundle.get("mode", "evidence"))
+    a.fsd_label, a.fsd_score, a.fsd_threshold = res.label, res.score, res.threshold
+    a.fsd_real_percentile, a.fsd_n_faces, a.fsd_n_sampled = res.real_percentile, res.n_faces, res.n_sampled
+    a.fsd_top_time_s, a.fsd_top_crop = res.top_time_s, res.top_crop
+    a.fsd_available = res.label in ("swap", "no_swap")
+    a.warnings += [w for w in res.warnings if w not in a.warnings]
+    if a.fsd_available:
+        a.layers["face_swap"] = (
+            f"{'flags a face-swap' if res.label == 'swap' else 'no face-swap signs'} "
+            f"(score {res.score:+.2f}, threshold {res.threshold:+.2f}, face in {res.n_faces} of "
+            f"{res.n_sampled} sampled frames{'' if a.fsd_mode == 'decisive' else ', evidence only'})"
+        )
+    else:
+        a.layers["face_swap"] = "could not run: " + (res.warnings[-1] if res.warnings else res.label)
     if not a.duration_s and res.duration_s:
         a.duration_s = float(res.duration_s)
 
@@ -555,8 +649,27 @@ def verdict_for(analysis: PulseAnalysis, thresholds: VerdictThresholds | None = 
             )
         return a
 
-    if a.detector_score is not None and a.detector_score <= thr.faceswap_threshold:
+    fsd_decides = a.fsd_mode == "decisive" and a.fsd_available
+    if fsd_decides and a.fsd_label == "swap":
         a.verdict, a.decided_by = "fake", "face_swap"
+        a.headline = "Possible face-swap"
+        a.detail = (
+            f"The face-swap detector scores the face {a.fsd_score:+.2f}, at or above its "
+            f"threshold of {a.fsd_threshold:+.2f} (set so that about 3% of real faces cross it)."
+        )
+        if a.fsd_real_percentile is not None:
+            a.detail += f" That is higher than {a.fsd_real_percentile:.0%} of real faces."
+        if a.fsd_top_time_s is not None:
+            a.detail += f" The most suspicious face is at {a.fsd_top_time_s:.1f} s (shown below)."
+        if a.ai_label == "real":
+            a.detail += " The whole-frame AI-video detector did not flag the clip."
+        return a
+
+    # The pulse check decides only when the face-swap detector could not
+    # look at a face (no bundle, no face found, or evidence-only mode).
+    if (not fsd_decides and a.detector_score is not None
+            and a.detector_score <= thr.faceswap_threshold):
+        a.verdict, a.decided_by = "fake", "pulse"
         a.headline = "Possible face-swap"
         a.detail = (
             f"The face-region consistency score ({a.detector_score:+.2f}) is at or "
@@ -571,11 +684,13 @@ def verdict_for(analysis: PulseAnalysis, thresholds: VerdictThresholds | None = 
     if a.ai_label == "real" and a.ai_score is not None:
         a.verdict, a.decided_by = "real", "ai_video"
         a.headline = "No sign of AI generation found"
-        swap = (
-            "The face-swap check also passed."
-            if a.detector_score is not None
-            else f"The face-swap check did not run ({a.layers.get('pulse', 'not run')})."
-        )
+        if fsd_decides:
+            swap = f"The face-swap detector also found no sign of a face-swap ({a.fsd_score:+.2f})."
+        elif a.detector_score is not None:
+            swap = "The face-swap check also passed."
+        else:
+            swap = (f"No face-swap check could run ({a.layers.get('face_swap', 'not run')}; "
+                    f"pulse: {a.layers.get('pulse', 'not run')}).")
         a.detail = (
             f"The whole-frame detector scores this clip {a.ai_score:+.2f}, below its "
             f"threshold of {a.ai_threshold:+.2f}. {swap} This is not proof the video "
@@ -716,7 +831,7 @@ def build_demo(
         if progress is None:
             progress = gr.Progress()
         if not video_path:
-            return ("Upload a video first.", "", "", None, CAVEAT)
+            return ("Upload a video first.", "", "", None, None, CAVEAT)
         progress(0.0, desc="Starting")
         analysis = analyze_video(
             video_path, cfg, model_path=model_path, thresholds=thresholds,
@@ -724,7 +839,12 @@ def build_demo(
         )
         progress(1.0, desc="Done")
         evidence = _evidence_text(analysis)
-        return (analysis.headline, analysis.detail, evidence, _plot(analysis), CAVEAT)
+        face = None
+        if analysis.fsd_top_crop is not None:
+            caption = (f"most suspicious face, at {analysis.fsd_top_time_s:.1f} s "
+                       f"(face-swap score {analysis.fsd_score:+.2f})")
+            face = [(analysis.fsd_top_crop, caption)]  # a Gallery takes a list
+        return (analysis.headline, analysis.detail, evidence, face, _plot(analysis), CAVEAT)
 
     # Note (gradio 6+): theme/CSS moved from the Blocks constructor to
     # demo.launch(); they are applied in main() from _ui_theme()/UI_CSS.
@@ -742,11 +862,17 @@ def build_demo(
                     sources=["upload"],
                     elem_id="tb-video",
                 )
+                gr.Markdown(
+                    "The preview may not play for HEVC / iPhone video; the analysis still runs.",
+                    elem_id="tb-hevc",
+                )
                 btn = gr.Button("Analyse", variant="primary", elem_id="tb-analyse")
             with gr.Column():
                 verdict = gr.Markdown(elem_id="tb-verdict")
                 detail = gr.Markdown(elem_id="tb-detail")
                 evidence = gr.Markdown(elem_id="tb-evidence")
+                face_img = gr.Gallery(label="Face the face-swap detector found most suspicious",
+                                      elem_id="tb-face", columns=1, height=260, allow_preview=False)
         plot = gr.Plot(label="Per-region pulse waveforms", elem_id="tb-plot")
         caveat = gr.Markdown(
             f"**Caveat: always applies:** {CAVEAT}", elem_id="tb-caveat"
@@ -757,7 +883,7 @@ def build_demo(
         btn.click(
             run,
             inputs=[video],
-            outputs=[verdict, detail, evidence, plot, caveat],
+            outputs=[verdict, detail, evidence, face_img, plot, caveat],
             show_progress_on=[plot],
         )
 
@@ -849,6 +975,14 @@ def _evidence_text(a: PulseAnalysis) -> str:
         swap_text = "n/a (not computed: face not tracked reliably)"
     else:
         swap_text = "n/a (no model: degraded mode)"
+    if a.fsd_available:
+        fsd_text = (f"score {a.fsd_score:+.2f} (flags at >= {a.fsd_threshold:+.2f})"
+                    + (f"; higher than {a.fsd_real_percentile:.0%} of real faces"
+                       if a.fsd_real_percentile is not None else "")
+                    + f"; face in {a.fsd_n_faces} of {a.fsd_n_sampled} frames"
+                    + ("" if a.fsd_mode == "decisive" else "; evidence only"))
+    else:
+        fsd_text = a.layers.get("face_swap", "not run")
     hr_text = ", ".join(
         f"{n}: {b:.1f} bpm" for n, b in zip(a.roi_names, a.per_roi_hr) if np.isfinite(b)
     ) or "n/a"
@@ -866,7 +1000,8 @@ def _evidence_text(a: PulseAnalysis) -> str:
         "|---------|-------|",
         f"| AI-video detector | {ai_text} |",
         f"| Content Credentials | {prov_text} |",
-        f"| face-swap check | {swap_text} |",
+        f"| face-swap detector | {fsd_text} |",
+        f"| face-swap check (pulse) | {swap_text} |",
         f"| pulse | {pulse_text} |",
         f"| per-region heart rate | {hr_text} |",
         f"| region agreement | {fmt(a.agreement_bpm, '.1f')} bpm spread |",
