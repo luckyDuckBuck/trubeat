@@ -181,6 +181,8 @@ def read_provenance(path) -> ProvenanceResult  # has_c2pa, ai_declared, source_t
 def sample_segments(path, config=None, starts_s=None) -> tuple[np.ndarray, dict]  # explicit starts
 def is_graphic(segment, config=None) -> bool          # mostly flat 8x8 blocks
 def guarded_segments(path, config=None) -> tuple[np.ndarray, dict]  # skips title cards; E_GRAPHICS_ONLY
+def segment_embeddings(path, embedder, config=None, use_cache=True, guard=False)  # guard: inference only,
+    # cached under its own key (2026-11-06 review: analyze no longer bypasses the cache)
 
 # faceswap.py (added 2026-11-06, docs/12; additive, face-swap detector)
 def sample_frames(path, n, max_seconds) -> SampledFrames   # n frames, native resolution
@@ -189,7 +191,13 @@ class FaceEmbedder: def embed(crops) -> np.ndarray         # stage 1: frozen bac
 class CNNScorer: def score(crops) -> np.ndarray            # stage 2: fine-tuned CNN logits
 def analyze(path, bundle, embedder=None, finder=None, progress=None) -> FaceSwapResult
     # score, threshold, label (swap | no_swap | no_face | unknown), real_percentile,
-    # n_faces, top_crop / top_time_s (the most suspicious face), warnings
+    # n_faces, top_crop / top_time_s (the most suspicious face), warnings;
+    # clips under min_seconds (2 s) -> unknown + E_SHORT_VIDEO (docs/12 §5 B)
+def cnn_weights_path(bundle) -> Path | None  # stage-2 weights whose SHA-256 matches the bundle:
+    # next to the bundle, then models/, data/models/, the package, ~/.cache/trubeat
+def fetch_cnn_weights(bundle) -> Path        # `trubeat fetch-models`: download + SHA-256 check
+# bundle["mode"] (decisive | evidence) is written only by `scripts/train_faceswap.py ship`,
+# which applies docs/12 §6 to gates 1-3 (Colab) and gate 4 (scripts/check_faceswap_reals.py)
 ```
 
 ## 5. Key design numbers

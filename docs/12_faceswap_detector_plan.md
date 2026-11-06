@@ -159,6 +159,12 @@ NeuralTextures AUC (reenactment), a WhatsApp-like re-encode of the test set
 (scale to 640 px wide, CRF 30), and the RepresentUs clip's score. 95%
 bootstrap intervals on every AUC; Wilson intervals on every rate.
 
+**Applying the outcome.** `scripts/train_faceswap.py ship --bundle <from Colab>
+--gate4 reports/faceswap_gate4.json` applies these rules mechanically and is the only
+step that writes the bundle's `mode`. It refuses a gate-4 result measured on a different
+bundle file, and a stage-2 bundle whose weights do not match its SHA-256. Training
+(`select`, `finetune`) runs the identity-leakage validator first (AGENTS.md §6).
+
 **Title-card guard (A)** is adopted only if it flags < 0.5% of dataset
 first segments; held-out AI-video numbers are then recomputed and must not
 change by more than the flagged share.

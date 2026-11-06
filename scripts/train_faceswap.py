@@ -429,6 +429,28 @@ def gates(metrics: dict) -> list[tuple[str, bool | None, str]]:
     return out
 
 
+def check_manifest(df: pd.DataFrame) -> None:
+    """AGENTS.md §6: the identity-leakage validator runs before every
+    training job. FaceForensics++ rows carry the official splits (group =
+    the source/target pair); DeepFakeDetection rows are external and must
+    not share a group with them. Raises ValueError on leakage."""
+    from trubeat import eval as ev
+
+    ff = df[df.split != "external"]
+    ev.validate_manifest(ff.rename(columns={"group": "split_group"}))
+    shared = set(ff.group) & set(df[df.split == "external"].group)
+    if shared:
+        raise ValueError(f"identity leakage: {len(shared)} group(s) in both the FaceForensics++ splits "
+                         f"and the external set: {sorted(shared)[:5]}")
+
+
+def gate_passed(bundle: dict, k: int) -> bool:
+    """True when every entry of docs/12 §6 gate ``k`` in the bundle passed
+    (gate 1 has one entry per face-swap set; "n/a" counts as not passed)."""
+    vals = [ok for n, ok, _ in bundle["gates"] if n.startswith(f"{k}.")]
+    return bool(vals) and all(v is True for v in vals)
+
+
 def cmd_select(a) -> None:
     import joblib
     import train_aigen as ta
@@ -438,6 +460,7 @@ def cmd_select(a) -> None:
     base_cfg = fs.merged_config({k: v for k, v in raw.items() if k != "candidates"})
     backbones = a.backbones or raw.get("candidates", [base_cfg["backbone"]])
     df = pd.read_csv(a.manifest)
+    check_manifest(df)
     fdir, out = Path(a.features_dir), Path(a.out_dir)
     out.mkdir(parents=True, exist_ok=True)
     trainval = (df.split.isin(["train", "val"])).to_numpy()
@@ -548,6 +571,7 @@ def cmd_finetune(a) -> None:
     base_cfg = fs.merged_config({k: v for k, v in raw.items() if k != "candidates"})
     min_faces = int(base_cfg["min_faces"])
     df = pd.read_csv(a.manifest)
+    check_manifest(df)
     items = _clip_items(df, Path(a.crops_dir), min_faces)
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     torch.manual_seed(7)
@@ -686,10 +710,10 @@ def cmd_finetune(a) -> None:
 
 
 def cmd_evaluate(a) -> None:
-    import joblib
-
     warnings.filterwarnings("ignore")
-    bundle = joblib.load(a.bundle)
+    bundle = fs.load_bundle(a.bundle)
+    if bundle is None:
+        raise SystemExit(f"no bundle at {a.bundle}")
     cfg = bundle["config"]
     df = pd.read_csv(a.manifest)
     ho = df[~df.split.isin(["train", "val"])].reset_index(drop=True)
@@ -699,9 +723,8 @@ def cmd_evaluate(a) -> None:
 
         if not a.crops_dir:
             raise SystemExit("a stage-2 bundle needs --crops-dir")
-        weights = Path(a.bundle).parent / bundle["cnn"]["file"]
-        scorer = fs.CNNScorer(bundle["cnn"]["arch"], weights, bundle["cnn"]["mean"], bundle["cnn"]["std"],
-                              device=a.device if a.device != "auto" else "cpu")
+        # weights next to the bundle, checked against its SHA-256
+        scorer = fs.CNNScorer.from_bundle(bundle, device=a.device if a.device != "auto" else "cpu")
         for vid, files in _clip_items(ho, Path(a.crops_dir), int(cfg["min_faces"])).items():
             crops = np.stack([cv2.imread(str(f))[:, :, ::-1] for f in files])
             scores[int(np.where(ho.video_id == vid)[0][0])] = float(scorer.score(crops).mean())
@@ -716,6 +739,47 @@ def cmd_evaluate(a) -> None:
     with open(a.report, "a") as f:
         f.write("\n" + text)
     print(text)
+
+
+def cmd_ship(a) -> None:
+    """docs/12 §6 outcome -> the installed bundle. Gates 1-3 come from the
+    bundle (measured on Colab), gate 4 from the laptop's check of this same
+    bundle file. All pass -> ``decisive``; gates 1-2 pass -> ``evidence``;
+    otherwise nothing is shipped. A stage-2 bundle's weights must match its
+    SHA-256; they are copied into ~/.cache/trubeat and the bundle records
+    the release URL ``trubeat fetch-models`` downloads them from."""
+    import shutil
+
+    import joblib
+
+    src = Path(a.bundle)
+    g4 = json.loads(Path(a.gate4).read_text())
+    if g4.get("bundle_sha256") != hashlib.sha256(src.read_bytes()).hexdigest():
+        raise SystemExit("the gate-4 result was measured on a different bundle file; rerun "
+                         "scripts/check_faceswap_reals.py on this one")
+    b = joblib.load(src)
+    b.pop("_path", None)
+    g1, g2, g3, g4ok = gate_passed(b, 1), gate_passed(b, 2), gate_passed(b, 3), bool(g4["passed"])
+    if not (g1 and g2):
+        raise SystemExit(f"not shipped (docs/12 §6): gate 1 {'pass' if g1 else 'fail'}, "
+                         f"gate 2 {'pass' if g2 else 'fail'}")
+    mode = "decisive" if (g3 and g4ok) else "evidence"
+    b["gates"] = [(n, g4ok, f"{g4['k']}/{g4['n']} flagged") if n.startswith("4.") else (n, ok, v)
+                  for n, ok, v in b["gates"]]
+    b.update(mode=mode, gate4=g4, shipped=time.strftime("%Y-%m-%d %H:%M"))
+    if b.get("kind") == "cnn":
+        w = src.parent / b["cnn"]["file"]
+        if not w.is_file() or hashlib.sha256(w.read_bytes()).hexdigest() != b["cnn"]["sha256"]:
+            raise SystemExit(f"{w} is missing or does not match the bundle's SHA-256")
+        if not a.url:
+            raise SystemExit("a stage-2 bundle needs --url (the release asset the weights download from)")
+        b["cnn"]["url"] = a.url
+        cache = Path.home() / ".cache" / "trubeat"
+        cache.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(w, cache / b["cnn"]["file"])
+    Path(a.out).parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump(b, a.out)
+    log(f"shipped {src.name} -> {a.out}: mode {mode} (gates 1 {g1}, 2 {g2}, 3 {g3}, 4 {g4ok})")
 
 
 def main() -> None:
@@ -770,9 +834,15 @@ def main() -> None:
     v.add_argument("--title", default="Robustness: WhatsApp-like re-encode (640 px wide, CRF 30)")
     v.add_argument("--crops-dir", default=None, help="stage-2 bundles: the variant's saved crops")
     v.add_argument("--device", default="auto")
+    sh = sub.add_parser("ship", help="apply docs/12 §6 and write the bundle the app loads")
+    sh.add_argument("--bundle", required=True, help="faceswap.joblib or faceswap_cnn.joblib from Colab")
+    sh.add_argument("--gate4", required=True, help="the JSON written by scripts/check_faceswap_reals.py")
+    sh.add_argument("--out", default=str(REPO / "src/trubeat/models/faceswap.joblib"))
+    sh.add_argument("--url", default="", help="stage 2: the release URL the weights download from")
     a = ap.parse_args()
     {"download": cmd_download, "manifest": cmd_manifest, "extract": cmd_extract,
-     "select": cmd_select, "finetune": cmd_finetune, "evaluate": cmd_evaluate}[a.cmd](a)
+     "select": cmd_select, "finetune": cmd_finetune, "evaluate": cmd_evaluate,
+     "ship": cmd_ship}[a.cmd](a)
 
 
 if __name__ == "__main__":

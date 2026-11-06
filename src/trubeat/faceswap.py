@@ -30,11 +30,12 @@ from pathlib import Path
 
 import numpy as np
 
-from .errors import ModelMissing, UnreadableVideo
+from .errors import ModelMissing, ShortVideo, UnreadableVideo
 
 DEFAULT_CONFIG: dict = {
     "n_frames": 16,
     "max_seconds": 120.0,
+    "min_seconds": 2.0,      # docs/12 §5 B: shorter clips are not judged
     "min_faces": 4,
     "max_faces": 3,
     "crop_scale": 1.3,
@@ -350,11 +351,14 @@ class CNNScorer:
     @classmethod
     def from_bundle(cls, bundle: dict, device: str = "cpu") -> CNNScorer:
         cnn = bundle["cnn"]
-        path = cnn_weights_path(cnn["file"])
+        path = cnn_weights_path(bundle)
         if path is None:
+            stale = _weight_candidates(bundle)
             raise ModelMissing(
-                f"face-swap CNN weights {cnn['file']} are not on this machine; run "
-                "`trubeat fetch-models` once (the only step that downloads)"
+                (f"the face-swap CNN weights at {stale[0]} do not match the installed bundle "
+                 "(SHA-256 differs: a copy from another training run?)" if stale else
+                 f"face-swap CNN weights {cnn['file']} are not on this machine")
+                + "; run `trubeat fetch-models` once (the only step that downloads)"
             )
         cfg = merged_config(bundle["config"])
         return cls(cnn["arch"], path, cnn["mean"], cnn["std"], int(cfg["torch_threads"]), device)
@@ -392,17 +396,40 @@ class CNNScorer:
 
 
 def model_dirs() -> list[Path]:
-    """Where stage-2 weights are looked for, in order."""
+    """Where stage-2 weights are looked for, in order (after the bundle's own
+    directory): the same places bundles are found, then the download cache."""
     import os
 
     dirs = [Path(d) for d in (os.environ.get("TRUBEAT_MODEL_DIR"),) if d]
-    return dirs + [Path("models"), Path(__file__).parent / "models", Path.home() / ".cache" / "trubeat"]
+    return dirs + [Path("models"), Path("data/models"), Path(__file__).parent / "models",
+                   Path.home() / ".cache" / "trubeat"]
 
 
-def cnn_weights_path(file: str) -> Path | None:
-    for d in model_dirs():
-        if (d / file).is_file():
-            return d / file
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _weight_candidates(bundle: dict) -> list[Path]:
+    """Local files named like the bundle's stage-2 weights: next to the
+    bundle file first, then ``model_dirs()``."""
+    file = bundle["cnn"]["file"]
+    dirs = ([Path(bundle["_path"]).parent] if bundle.get("_path") else []) + model_dirs()
+    seen = dict.fromkeys(d.resolve() for d in dirs)
+    return [d / file for d in seen if (d / file).is_file()]
+
+
+def cnn_weights_path(bundle: dict) -> Path | None:
+    """The first local copy of the bundle's weights whose SHA-256 matches the
+    bundle; a copy left from another training run is skipped, never paired
+    with this bundle's threshold."""
+    want = bundle["cnn"].get("sha256")
+    for p in _weight_candidates(bundle):
+        if not want or _sha256(p) == want:
+            return p
     return None
 
 
@@ -412,7 +439,7 @@ def fetch_cnn_weights(bundle: dict) -> Path:
     import urllib.request
 
     cnn = bundle["cnn"]
-    have = cnn_weights_path(cnn["file"])
+    have = cnn_weights_path(bundle)
     if have is not None:
         return have
     if not cnn.get("url"):
@@ -423,8 +450,7 @@ def fetch_cnn_weights(bundle: dict) -> Path:
     with urllib.request.urlopen(cnn["url"], timeout=120) as r, open(tmp, "wb") as f:
         while chunk := r.read(1 << 20):
             f.write(chunk)
-    digest = hashlib.sha256(tmp.read_bytes()).hexdigest()
-    if cnn.get("sha256") and digest != cnn["sha256"]:
+    if cnn.get("sha256") and _sha256(tmp) != cnn["sha256"]:
         tmp.unlink()
         raise ModelMissing(f"downloaded {cnn['file']} does not match its SHA-256")
     tmp.replace(dest)
@@ -500,6 +526,11 @@ def analyze(path: str | Path, bundle: dict, embedder: FaceEmbedder | CNNScorer |
         sampled = sample_frames(path, int(cfg["n_frames"]), float(cfg["max_seconds"]))
     except UnreadableVideo as exc:
         return FaceSwapResult(None, thr, "unknown", warnings=[f"{exc.code}: {exc}"])
+    if sampled.fps > 0 and sampled.duration_s < float(cfg["min_seconds"]):
+        note = (f"{ShortVideo.code}: the clip is {sampled.duration_s:.1f} s; the face-swap detector "
+                f"needs at least {float(cfg['min_seconds']):.0f} s")
+        return FaceSwapResult(None, thr, "unknown", n_sampled=len(sampled.frames),
+                              duration_s=sampled.duration_s, warnings=[note])
     own_finder = finder is None
     finder = finder or FaceFinder(cfg)
     try:

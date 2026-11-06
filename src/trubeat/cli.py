@@ -169,22 +169,26 @@ def cmd_fetch_models(args):
     network step): the AI-video detector's and, when a face-swap bundle is
     installed, its backbone too. ``--backbone`` fetches just that one."""
     from . import aigen, faceswap
+    from .errors import ModelMissing
 
     wanted = [args.backbone] if args.backbone else []
+    fsb = None if args.backbone else faceswap.load_bundle()
     if not wanted:
         ai = aigen.find_bundle()
         wanted.append(ai["config"]["backbone"] if ai else aigen.DEFAULT_CONFIG["backbone"])
-        fsb = faceswap.load_bundle()
         if fsb is not None and fsb.get("kind") != "cnn":
             wanted.append(fsb["config"]["backbone"])
-    out = {}
+    out, failed = {}, {}
     for b in dict.fromkeys(wanted):
         out[b] = aigen.fetch_weights(b)
-    if not args.backbone:
-        fsb = faceswap.load_bundle()
-        if fsb is not None and fsb.get("kind") == "cnn":
+    if fsb is not None and fsb.get("kind") == "cnn":
+        try:
             out[fsb["cnn"]["file"]] = str(faceswap.fetch_cnn_weights(fsb))
-    print(json.dumps({"fetched": out}))
+        except ModelMissing as exc:
+            failed[fsb["cnn"]["file"]] = str(exc)
+    print(json.dumps({"fetched": out, **({"failed": failed} if failed else {})}))
+    if failed:
+        raise SystemExit(1)
 
 
 def main() -> None:

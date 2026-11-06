@@ -340,6 +340,52 @@ section("2. overlay.js — verdict mapping and copy");
   );
 }
 
+section("2c. overlay.js — the result shows the face-swap detector's own numbers");
+{
+  let listener = null;
+  const body = { innerHTML: "" };
+  const el = () => ({
+    attachShadow: () => ({ append: () => {}, appendChild: () => {} }),
+    style: {},
+    isConnected: true,
+    innerHTML: "",
+    textContent: "",
+    querySelector: (sel) =>
+      sel === ".body" ? body : { addEventListener: () => {}, style: {}, textContent: "" },
+    remove: () => {},
+  });
+  loadScript("overlay.js", {
+    chrome: chromeStub({
+      runtime: { onMessage: { addListener: (f) => { listener = f; } }, id: "test" },
+    }),
+    window: {},
+    document: { createElement: el, body: { appendChild: () => {} }, getElementById: () => null },
+    console,
+  });
+  const show = (result) => {
+    listener({ type: "TRUEBEAT_STATE", payload: { state: "result", result } });
+    return body.innerHTML;
+  };
+  check("overlay listens for results", typeof listener === "function");
+  if (listener) {
+    const html = show({
+      verdict: "fake", decided_by: "face_swap", fsd_mode: "decisive", fsd_score: 1.4,
+      fsd_threshold: 0.5, fsd_n_faces: 15, fsd_n_sampled: 16, score: -0.2,
+    });
+    check(
+      "the detector's score, threshold and faces are shown",
+      /face-swap detector<\/td><td class="v">score 1\.40 \(flags at 0\.50\); face in 15 of 16 frames/.test(html),
+      html
+    );
+    check("decided by reads 'face swap'", /decided by<\/td><td class="v">face swap/.test(html), html);
+    check("the pulse score is labelled as the pulse check's", /pulse face-swap score/.test(html), html);
+    const ev = show({ verdict: "real", fsd_mode: "evidence", fsd_score: 1.4, fsd_threshold: 0.5 });
+    check("an evidence-only detector says so", /flags at 0\.50\), evidence only/.test(ev), ev);
+    const none = show({ verdict: "real", ai_score: -1.0, ai_threshold: 1.1 });
+    check("no detector row when it did not run", !/face-swap detector/.test(none), none);
+  }
+}
+
 // ------------------------------------------ 2b. capture length planning (E3)
 
 section("2b. background.js — capture length matches the clip");

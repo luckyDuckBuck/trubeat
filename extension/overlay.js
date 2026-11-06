@@ -160,6 +160,14 @@
               : ""),
         ]);
       }
+      if (r.fsd_score != null) {
+        rows.push([
+          "face-swap detector",
+          "score " + num(r.fsd_score, 2) + " (flags at " + num(r.fsd_threshold, 2) + ")" +
+            (r.fsd_mode === "decisive" ? "" : ", evidence only") +
+            (r.fsd_n_sampled ? "; face in " + r.fsd_n_faces + " of " + r.fsd_n_sampled + " frames" : ""),
+        ]);
+      }
       if (r.decided_by) {
         rows.push(["decided by", String(r.decided_by).replace("_", " ")]);
       }
@@ -179,7 +187,7 @@
         rows.push(["face visible", Math.round(r.face_valid_frac * 100) + "%"]);
       }
       if (r.score != null) {
-        rows.push(["face-swap score", num(r.score, 3)]);
+        rows.push(["pulse face-swap score", num(r.score, 3)]);
       }
       body.innerHTML = `
         <div class="msg" style="color:${style.accent};font-weight:600">

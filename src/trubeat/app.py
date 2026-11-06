@@ -195,6 +195,7 @@ class PulseAnalysis:
     fsd_label: str = "unknown"  # "swap" | "no_swap" | "no_face" | "unknown"
     fsd_score: float | None = None  # positive = face-swap
     fsd_threshold: float | None = None
+    fsd_target_fpr: float | None = None  # share of real faces the threshold lets through
     fsd_real_percentile: float | None = None
     fsd_n_faces: int = 0
     fsd_n_sampled: int = 0
@@ -420,6 +421,7 @@ def _face_swap_layer(a: PulseAnalysis, path: Path, faceswap_path,
         a.warnings.append("W_FACESWAP_DETECTOR_FAILED")
         return
     a.fsd_mode = str(bundle.get("mode", "evidence"))
+    a.fsd_target_fpr = float(faceswap.merged_config(bundle["config"])["target_fpr"])
     a.fsd_label, a.fsd_score, a.fsd_threshold = res.label, res.score, res.threshold
     a.fsd_real_percentile, a.fsd_n_faces, a.fsd_n_sampled = res.real_percentile, res.n_faces, res.n_sampled
     a.fsd_top_time_s, a.fsd_top_crop = res.top_time_s, res.top_crop
@@ -606,15 +608,20 @@ def _waveforms(
 def verdict_for(analysis: PulseAnalysis, thresholds: VerdictThresholds | None = None) -> PulseAnalysis:
     """Fuse the layers into the three-state verdict, in place (docs/11 E1).
 
-    Order, strongest evidence first:
+    Order, strongest evidence first (docs/12 §5 B):
       1. Content Credentials declaring AI generation -> ``fake``.
       2. The whole-frame AI-video detector over its threshold -> ``fake``.
-      3. The strict face-swap score -> ``fake`` ("possible face-swap").
-      4. The AI-video detector ran and nothing fired -> ``real``
-         ("no sign of AI generation found", never "authentic").
-      5. Nothing could decide -> ``inconclusive``, listing why per layer.
+      3. The face-swap detector over its threshold, when its bundle is
+         ``decisive`` (docs/12 §6) -> ``fake`` ("possible face-swap").
+      4. The pulse check's strict face-swap score -> ``fake``, only when the
+         face-swap detector could not decide (no bundle, no face, or
+         evidence-only mode).
+      5. The AI-video detector ran and nothing fired -> ``real``
+         ("no sign of AI generation found", never "authentic"); an
+         evidence-only face-swap flag is stated in the detail.
+      6. Nothing could decide -> ``inconclusive``, listing why per layer.
 
-    The pulse itself does not decide: on web-quality video it is not
+    The pulse rate itself does not decide: on web-quality video it is not
     measurable for real faces either (docs/11, Phase B result).
     """
     thr = thresholds or DEFAULT_THRESHOLDS
@@ -655,7 +662,8 @@ def verdict_for(analysis: PulseAnalysis, thresholds: VerdictThresholds | None = 
         a.headline = "Possible face-swap"
         a.detail = (
             f"The face-swap detector scores the face {a.fsd_score:+.2f}, at or above its "
-            f"threshold of {a.fsd_threshold:+.2f} (set so that about 3% of real faces cross it)."
+            f"threshold of {a.fsd_threshold:+.2f} (set so that about "
+            f"{a.fsd_target_fpr or 0.03:.0%} of real faces cross it)."
         )
         if a.fsd_real_percentile is not None:
             a.detail += f" That is higher than {a.fsd_real_percentile:.0%} of real faces."
@@ -686,8 +694,15 @@ def verdict_for(analysis: PulseAnalysis, thresholds: VerdictThresholds | None = 
         a.headline = "No sign of AI generation found"
         if fsd_decides:
             swap = f"The face-swap detector also found no sign of a face-swap ({a.fsd_score:+.2f})."
+        elif a.fsd_available and a.fsd_label == "swap":
+            swap = (f"The face-swap detector does flag the face ({a.fsd_score:+.2f}, threshold "
+                    f"{a.fsd_threshold:+.2f}), but it is shown as evidence only: it is not yet "
+                    "accurate enough to decide on its own. Look closer at the face.")
+        elif a.fsd_available:
+            swap = (f"The face-swap detector (evidence only) found no sign of a face-swap "
+                    f"({a.fsd_score:+.2f}).")
         elif a.detector_score is not None:
-            swap = "The face-swap check also passed."
+            swap = "The pulse face-swap check also passed."
         else:
             swap = (f"No face-swap check could run ({a.layers.get('face_swap', 'not run')}; "
                     f"pulse: {a.layers.get('pulse', 'not run')}).")
@@ -912,6 +927,11 @@ def build_demo(
                     "ai_score": a.ai_score,
                     "ai_threshold": a.ai_threshold,
                     "decided_by": a.decided_by,
+                    # The face-swap detector (docs/12): its own score and
+                    # threshold, so a verdict it decides carries its numbers.
+                    **{k: getattr(a, k) for k in (
+                        "fsd_mode", "fsd_label", "fsd_score", "fsd_threshold", "fsd_target_fpr",
+                        "fsd_real_percentile", "fsd_n_faces", "fsd_n_sampled", "fsd_top_time_s")},
                     "layers": a.layers,
                     "provenance": a.provenance,
                     "duration_s": a.duration_s,

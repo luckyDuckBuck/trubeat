@@ -206,9 +206,9 @@ def test_cnn_bundle_scores_crops_and_checks_its_weights(tmp_path, monkeypatch):
                       "url": src.as_uri(), "mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]}}
     monkeypatch.setattr(fs.Path, "home", staticmethod(lambda: tmp_path / "home"))
     monkeypatch.setattr(fs, "model_dirs", lambda: [tmp_path / "home" / ".cache" / "trubeat"])
-    assert fs.cnn_weights_path("w.safetensors") is None
+    assert fs.cnn_weights_path(bundle) is None
     got = fs.fetch_cnn_weights(bundle)
-    assert got.is_file() and fs.cnn_weights_path("w.safetensors") == got
+    assert got.is_file() and fs.cnn_weights_path(bundle) == got
     p = synth.write_pulse_video(tmp_path / "v.mp4", fps=30.0, duration_s=3.0)
     r = fs.analyze(p, bundle, finder=_StubFinder(found=6))
     assert r.label in ("swap", "no_swap") and r.n_faces == 6 and np.isfinite(r.score)
@@ -224,4 +224,89 @@ def test_cnn_weights_with_a_wrong_hash_are_refused(tmp_path, monkeypatch):
     bundle = {"cnn": {"file": "w.safetensors", "url": src.as_uri(), "sha256": "0" * 64}}
     with pytest.raises(ModelMissing):
         fs.fetch_cnn_weights(bundle)
-    assert fs.cnn_weights_path("w.safetensors") is None
+    assert fs.cnn_weights_path(bundle) is None
+
+
+def test_stale_cnn_weights_are_never_paired_with_a_new_bundle(tmp_path, monkeypatch):
+    """Review 2026-11-06: a copy from an earlier training run (same file
+    name, other weights) is refused; fetch-models replaces it."""
+    import hashlib
+
+    from trubeat.errors import ModelMissing
+
+    good = tmp_path / "release" / "w.safetensors"
+    good.parent.mkdir()
+    good.write_bytes(b"the new weights")
+    cache = tmp_path / "home" / ".cache" / "trubeat"
+    cache.mkdir(parents=True)
+    (cache / "w.safetensors").write_bytes(b"the old weights")
+    monkeypatch.setattr(fs.Path, "home", staticmethod(lambda: tmp_path / "home"))
+    monkeypatch.setattr(fs, "model_dirs", lambda: [cache])
+    bundle = {"config": {}, "cnn": {"arch": "x", "file": "w.safetensors", "url": good.as_uri(),
+                                    "sha256": hashlib.sha256(good.read_bytes()).hexdigest(),
+                                    "mean": [0.5] * 3, "std": [0.5] * 3}}
+    assert fs.cnn_weights_path(bundle) is None
+    with pytest.raises(ModelMissing, match="do not match"):
+        fs.CNNScorer.from_bundle(bundle)
+    assert fs.fetch_cnn_weights(bundle).read_bytes() == b"the new weights"
+    assert fs.CNNScorer.from_bundle(bundle).weights == cache / "w.safetensors"
+
+
+def test_cnn_weights_next_to_the_bundle_are_found(tmp_path, monkeypatch):
+    import hashlib
+
+    (tmp_path / "w.safetensors").write_bytes(b"weights")
+    monkeypatch.setattr(fs, "model_dirs", lambda: [])  # noqa: PIE807
+    bundle = {"_path": str(tmp_path / "faceswap_cnn.joblib"),
+              "cnn": {"file": "w.safetensors", "sha256": hashlib.sha256(b"weights").hexdigest()}}
+    assert fs.cnn_weights_path(bundle) == (tmp_path / "w.safetensors").resolve()
+
+
+def test_clips_under_two_seconds_are_not_judged(tmp_path):
+    p = synth.write_pulse_video(tmp_path / "v.mp4", fps=30.0, duration_s=1.0)
+    r = fs.analyze(p, _bundle(), embedder=_StubEmbedder(+1.0), finder=_StubFinder(found=30))
+    assert r.label == "unknown" and r.score is None and r.warnings[0].startswith("E_SHORT_VIDEO")
+
+
+def test_manifest_check_refuses_identity_leakage():
+    import train_faceswap as tf
+
+    ok = pd.DataFrame({"split": ["train", "train", "test", "external"],
+                       "group": ["ffpp:000_003", "ffpp:000_003", "ffpp:020_021", "dfd:01"]})
+    tf.check_manifest(ok)
+    with pytest.raises(ValueError, match="leakage"):
+        tf.check_manifest(ok.assign(split=["train", "test", "test", "external"]))
+    with pytest.raises(ValueError, match="external"):
+        tf.check_manifest(ok.assign(group=["ffpp:000_003", "ffpp:000_003", "ffpp:020_021", "ffpp:020_021"]))
+
+
+def _ship(tmp_path, gates_ok, g4_passed, kind="probe", same_file=True):
+    import hashlib
+    import types
+
+    import joblib
+    import train_faceswap as tf
+
+    names = ["1. a on Deepfakes", "1. a on FaceSwap", "1. a on FaceShifter", "2. reals", "3. DFD", "4. others"]
+    b = {"threshold": 0.0, "config": {}, "gates": [(n, ok, "v") for n, ok in zip(names, [*gates_ok, None])]}
+    src = tmp_path / "faceswap.joblib"
+    joblib.dump(b, src)
+    g4 = tmp_path / "g4.json"
+    g4.write_text(json.dumps({"bundle_sha256": hashlib.sha256(src.read_bytes()).hexdigest() if same_file else "x",
+                              "k": 3, "n": 300, "passed": g4_passed}))
+    out = tmp_path / "installed" / "faceswap.joblib"
+    tf.cmd_ship(types.SimpleNamespace(bundle=str(src), gate4=str(g4), out=str(out), url=""))
+    return joblib.load(out)
+
+
+def test_ship_applies_the_docs12_rules(tmp_path):
+    b = _ship(tmp_path, [True, True, True, True, True], True)
+    assert b["mode"] == "decisive" and b["gates"][-1][1] is True and b["gates"][-1][2] == "3/300 flagged"
+    assert _ship(tmp_path, [True, True, True, True, False], True)["mode"] == "evidence"   # gate 3 fails
+    assert _ship(tmp_path, [True, True, True, True, True], False)["mode"] == "evidence"   # gate 4 fails
+    with pytest.raises(SystemExit, match="not shipped"):
+        _ship(tmp_path, [True, False, True, True, True], True)                           # gate 1 fails
+    with pytest.raises(SystemExit, match="not shipped"):
+        _ship(tmp_path, [True, True, True, False, True], True)                           # gate 2 fails
+    with pytest.raises(SystemExit, match="different bundle"):
+        _ship(tmp_path, [True, True, True, True, True], True, same_file=False)

@@ -6,6 +6,9 @@ Gate: flagged <= 3% with at least 200 clips that have a face. Clips are
 taken in a fixed shuffled order (seed 7) until --target clips with a face
 have been scored.
 
+Writes reports/faceswap_gate4.{md,csv,json}; the JSON feeds
+`scripts/train_faceswap.py ship`.
+
 Usage:
     python scripts/check_faceswap_reals.py --bundle runs/faceswap/faceswap.joblib [--target 300]
 """
@@ -13,6 +16,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import multiprocessing as mp
 import sys
 import time
@@ -33,9 +38,9 @@ _W: dict = {}
 def _init(bundle_path: str) -> None:
     warnings.filterwarnings("ignore")
     b = fs.load_bundle(bundle_path)
-    if b.get("kind") == "cnn":  # weights sit next to the bundle when it comes from Colab
-        w = Path(bundle_path).parent / b["cnn"]["file"]
-        scorer = fs.CNNScorer(b["cnn"]["arch"], w, b["cnn"]["mean"], b["cnn"]["std"], torch_threads=2)
+    if b.get("kind") == "cnn":  # weights next to the bundle (from Colab), checked against its SHA-256
+        scorer = fs.CNNScorer.from_bundle(b)
+        scorer.torch_threads = 2
     else:
         cfg = fs.merged_config(b["config"])
         scorer = fs.FaceEmbedder(cfg["backbone"], cfg["feature"], 2, img_size=int(cfg["crop_size"]))
@@ -88,6 +93,11 @@ def main() -> None:
         L.append(f"| {s_} | {len(g)} | {int((g.label == 'swap').sum())} |")
     Path(args.out).write_text("\n".join(L) + "\n")
     df.to_csv(Path(args.out).with_suffix(".csv"), index=False)
+    # read by `train_faceswap.py ship`, which checks it belongs to the same bundle file
+    Path(args.out).with_suffix(".json").write_text(json.dumps({
+        "bundle": args.bundle, "bundle_sha256": hashlib.sha256(Path(args.bundle).read_bytes()).hexdigest(),
+        "k": k, "n": n, "rate": k / max(n, 1), "ci": [lo, hi], "passed": passed, "n_scored": len(df),
+        "created": time.strftime("%Y-%m-%d %H:%M")}, indent=1))
     print("\n".join(L))
 
 

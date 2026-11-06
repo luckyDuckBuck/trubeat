@@ -341,3 +341,27 @@ def test_flat_but_moving_scene_is_not_a_title_card():
     assert aigen.flat_fraction(seg[0], 4.0) > 0.7  # flat ...
     assert aigen.segment_motion(seg) > 0.5          # ... but moving
     assert not aigen.is_graphic(seg, cfg)
+
+
+def test_skipped_title_card_is_not_reported_as_a_short_clip(tmp_path):
+    """Review 2026-11-06: a long clip whose opening card was skipped fits all
+    its segments; W_SHORT_CLIP would give the wrong cause."""
+    frames = [_card()] * 24 + [_texture(i) for i in range(104)]  # 3 s card, then 13 s of texture
+    p = _write(tmp_path / "v.mp4", frames)
+    bundle = _tiny_bundle()
+    bundle["config"].update(img_size=64, max_segments=3, graphics_guard=True)
+    res = aigen.analyze(p, bundle, embedder=_StubEmbedder())
+    assert res.n_segments == 2, res.warnings
+    assert not any(w.startswith("W_SHORT_CLIP") for w in res.warnings), res.warnings
+    assert any(w.startswith("W_GRAPHICS_SKIPPED: 1 segment") for w in res.warnings)
+    assert any(w.startswith("W_PARTIAL_COVERAGE: scored on 2 of 3 evenly spaced") for w in res.warnings)
+
+
+def test_guarded_embeddings_are_cached_apart_from_unguarded(tmp_path):
+    p = _write(tmp_path / "v.mp4", [_card()] * 24 + [_texture(i) for i in range(40)])
+    cfg = aigen.merged_config({"img_size": 64, "max_segments": 1, "cache_dir": str(tmp_path / "c")})
+    assert aigen.cache_key(p, cfg) != aigen.cache_key(p, cfg, guard=True)
+    e1, m1 = aigen.segment_embeddings(p, _StubEmbedder(), cfg, use_cache=True, guard=True)
+    assert m1["n_graphic_skipped"] == 1 and len(list((tmp_path / "c").glob("*.npz"))) == 1
+    e2, m2 = aigen.segment_embeddings(p, _StubEmbedder(), cfg, use_cache=True, guard=True)  # from cache
+    assert np.array_equal(e1, e2) and m2["segment_starts_s"] == m1["segment_starts_s"]

@@ -267,6 +267,7 @@ def guarded_segments(path: str | Path, config: dict | None = None) -> tuple[np.n
     frames, meta = sample_segments(path, cfg)
     flags = [is_graphic(s, cfg) for s in frames]
     meta["n_graphic_skipped"] = int(sum(flags))
+    meta["n_segments_fit"] = int(meta.get("n_segments", len(frames)))  # before any were skipped
     if not any(flags):
         return frames, meta
     keep = [(s, st) for s, st, f in zip(frames, meta["segment_starts_s"], flags) if not f]
@@ -451,31 +452,35 @@ def _file_hash(path: Path) -> str:
     return h.hexdigest()
 
 
-def cache_key(path: Path, config: dict) -> str:
+_GUARD_KEYS = ("graphics_block_std", "graphics_flat_frac", "graphics_max_motion", "graphics_search_s")
+
+
+def cache_key(path: Path, config: dict, guard: bool = False) -> str:
     cfg = merged_config(config)
     h = hashlib.sha256(_file_hash(path).encode())
-    h.update(
-        json.dumps(
-            {k: cfg[k] for k in ("backbone", "img_size", "sample_fps", "n_frames", "max_segments")},
-            sort_keys=True,
-        ).encode()
-    )
+    params = {k: cfg[k] for k in ("backbone", "img_size", "sample_fps", "n_frames", "max_segments")}
+    if guard:  # guarded segments differ, so they get their own entries (unguarded keys unchanged)
+        params.update(guard=True, **{k: cfg[k] for k in _GUARD_KEYS})
+    h.update(json.dumps(params, sort_keys=True).encode())
     return h.hexdigest()[:20]
 
 
 def segment_embeddings(
-    path: str | Path, embedder: Embedder, config: dict | None = None, use_cache: bool = True
+    path: str | Path, embedder: Embedder, config: dict | None = None, use_cache: bool = True,
+    guard: bool = False,
 ) -> tuple[np.ndarray, dict]:
-    """(S, N, D) embeddings for a video, cached by content + parameters."""
+    """(S, N, D) embeddings for a video, cached by content + parameters.
+    ``guard`` skips title cards (``guarded_segments``; inference only, the
+    training features are unguarded)."""
     cfg = merged_config(config)
     p = Path(path)
     cache_file = None
     if use_cache and cfg.get("cache_dir"):
-        cache_file = Path(cfg["cache_dir"]) / f"{cache_key(p, cfg)}.npz"
+        cache_file = Path(cfg["cache_dir"]) / f"{cache_key(p, cfg, guard)}.npz"
         if cache_file.is_file():
             with np.load(cache_file, allow_pickle=False) as z:
                 return z["emb"], json.loads(str(z["meta"]))
-    frames, meta = sample_segments(p, cfg)
+    frames, meta = guarded_segments(p, cfg) if guard else sample_segments(p, cfg)
     s, n = frames.shape[:2]
     emb = embedder.embed(frames.reshape(s * n, *frames.shape[2:])).reshape(s, n, -1)
     if cache_file is not None:
@@ -619,12 +624,8 @@ def analyze(
             warnings += w
         report(0.55, "scoring frames with the vision model")
         try:
-            if cfg.get("graphics_guard"):
-                frames, meta = guarded_segments(src, cfg)
-                s_, n_ = frames.shape[:2]
-                seg_emb = embedder.embed(frames.reshape(s_ * n_, *frames.shape[2:])).reshape(s_, n_, -1)
-            else:
-                seg_emb, meta = segment_embeddings(src, embedder, cfg, use_cache=use_cache)
+            seg_emb, meta = segment_embeddings(src, embedder, cfg, use_cache=use_cache,
+                                               guard=bool(cfg.get("graphics_guard")))
         except (UnreadableVideo, ShortVideo, GraphicsOnly) as exc:
             return AIGenResult(None, None, thr, "unknown", feature_set=bundle["feature_set"],
                                warnings=warnings + [f"{exc.code}: {exc}"])
@@ -634,9 +635,10 @@ def analyze(
     pct = float(np.mean(np.asarray(ref) < score)) if ref is not None and len(ref) else None
     n_seg, dur = int(meta.get("n_segments", 0)), float(meta.get("duration_s", 0.0))
     seg_s = (int(cfg["n_frames"]) - 1) / float(cfg["sample_fps"])
-    if n_seg < int(cfg["max_segments"]):
+    n_fit = int(meta.get("n_segments_fit", n_seg))  # before title cards were skipped
+    if n_fit < int(cfg["max_segments"]):
         warnings.append(
-            f"W_SHORT_CLIP: {n_seg} of the {cfg['max_segments']} segments the model was "
+            f"W_SHORT_CLIP: {n_fit} of the {cfg['max_segments']} segments the model was "
             "evaluated with fit in this clip; lower confidence"
         )
     skipped = int(meta.get("n_graphic_skipped", 0))
@@ -652,6 +654,8 @@ def analyze(
         # long clip is therefore judged on part of its length only.
         if n_seg == 1:
             where = "the first" if starts[0] < seg_s / 2 else f"the {starts[0]:.1f} s"
+        elif skipped:
+            where = f"{n_seg} of {n_fit} evenly spaced"
         else:
             where = f"{n_seg} evenly spaced"
         warnings.append(

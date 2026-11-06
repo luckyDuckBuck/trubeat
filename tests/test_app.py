@@ -425,6 +425,16 @@ def test_ai_video_detector_still_comes_first():
 def test_evidence_only_detector_never_decides():
     a = verdict_for(_fsd("swap", 1.4, mode="evidence"), THR)
     assert a.verdict == "real" and a.decided_by == "ai_video"
+    # ... but its flag is stated plainly, never as a check that passed or did not run (review 2026-11-06)
+    assert "does flag the face (+1.40" in a.detail and "evidence only" in a.detail
+    assert "passed" not in a.detail and "could run" not in a.detail
+    b = verdict_for(_fsd("swap", 1.4, mode="evidence", detector_score=0.5), THR)  # pulse passed too
+    assert "does flag the face" in b.detail and "pulse" not in b.detail
+
+
+def test_face_swap_detail_states_the_bundles_false_alarm_target():
+    a = verdict_for(_fsd("swap", 1.4, fsd_target_fpr=0.05), THR)
+    assert "about 5% of real faces" in a.detail
 
 
 def test_decisive_detector_takes_over_from_the_pulse_check():
