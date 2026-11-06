@@ -32,7 +32,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .errors import ModelMissing, ShortVideo, UnreadableVideo
+from .errors import GraphicsOnly, ModelMissing, ShortVideo, UnreadableVideo
 
 DEFAULT_CONFIG: dict = {
     "backbone": "vit_small_patch14_dinov2.lvd142m",
@@ -43,6 +43,13 @@ DEFAULT_CONFIG: dict = {
     "max_segments": 3,
     "min_duration_s": 2.0,
     "cache_dir": "data/processed/aigen_emb",
+    # Title-card guard (docs/12 item A), inference only: a segment whose
+    # frames are mostly flat 8x8 blocks is a title card or graphic, and the
+    # first natural segment within graphics_search_s is scored instead.
+    "graphics_guard": True,
+    "graphics_block_std": 4.0,
+    "graphics_flat_frac": 0.7,
+    "graphics_search_s": 30.0,
 }
 
 # Geometry statistics computed for each per-step series.
@@ -158,7 +165,9 @@ def _decode_reservoir(
     return stamps, kept, info
 
 
-def sample_segments(path: str | Path, config: dict | None = None) -> tuple[np.ndarray, dict]:
+def sample_segments(
+    path: str | Path, config: dict | None = None, starts_s: list[float] | None = None
+) -> tuple[np.ndarray, dict]:
     """Decode fixed-rate frame segments from a video.
 
     Frames are chosen by *presentation timestamp*, not by frame index, so
@@ -187,7 +196,14 @@ def sample_segments(path: str | Path, config: dict | None = None) -> tuple[np.nd
         duration_s = float(rel_s[-1] * len(rel_s) / (len(rel_s) - 1))
     else:
         duration_s = 0.0
-    times = _target_times(duration_s, cfg, last_frame_s=float(rel_s[-1]) if len(rel_s) else 0.0)
+    last_s = float(rel_s[-1]) if len(rel_s) else 0.0
+    if starts_s is None:
+        times = _target_times(duration_s, cfg, last_frame_s=last_s)
+    else:  # explicit segment starts (the title-card guard's search), on the grid
+        step_ = 1.0 / float(cfg["sample_fps"])
+        n_ = int(cfg["n_frames"])
+        times = [np.floor(s / step_ + 1e-9) * step_ + step_ * np.arange(n_) for s in starts_s
+                 if np.floor(s / step_ + 1e-9) * step_ + step_ * (n_ - 1) <= last_s + 1e-6]
     if not times:
         raise ShortVideo(
             f"duration={duration_s:.2f}s is shorter than one "
@@ -212,8 +228,55 @@ def sample_segments(path: str | Path, config: dict | None = None) -> tuple[np.nd
         "width": info["width"],
         "height": info["height"],
         "n_segments": len(segments),
+        "segment_starts_s": [float(seg_t[0]) for seg_t in times],
     }
     return np.stack(segments), meta
+
+
+def flat_fraction(frame: np.ndarray, block_std: float) -> float:
+    """Share of 8x8 blocks whose grey-level std is below ``block_std``."""
+    g = frame.astype(np.float32).mean(axis=2)
+    h, w = (g.shape[0] // 8) * 8, (g.shape[1] // 8) * 8
+    b = g[:h, :w].reshape(h // 8, 8, w // 8, 8).transpose(0, 2, 1, 3).reshape(-1, 64)
+    return float((b.std(axis=1) < block_std).mean())
+
+
+def is_graphic(segment: np.ndarray, config: dict | None = None) -> bool:
+    """A title card / graphic: most of each frame is flat (docs/12 item A)."""
+    cfg = merged_config(config)
+    fr = [flat_fraction(f, float(cfg["graphics_block_std"])) for f in segment]
+    return float(np.median(fr)) >= float(cfg["graphics_flat_frac"])
+
+
+def guarded_segments(path: str | Path, config: dict | None = None) -> tuple[np.ndarray, dict]:
+    """sample_segments with title cards removed: graphic segments are dropped;
+    if every segment is graphic, the first natural 2 s segment within
+    ``graphics_search_s`` is used. Raises GraphicsOnly when there is none."""
+    cfg = merged_config(config)
+    frames, meta = sample_segments(path, cfg)
+    flags = [is_graphic(s, cfg) for s in frames]
+    meta["n_graphic_skipped"] = int(sum(flags))
+    if not any(flags):
+        return frames, meta
+    keep = [(s, st) for s, st, f in zip(frames, meta["segment_starts_s"], flags) if not f]
+    if not keep:
+        span = (int(cfg["n_frames"]) - 1) / float(cfg["sample_fps"])
+        cand = [k * span for k in range(1, int(float(cfg["graphics_search_s"]) // span) + 1)]
+        try:
+            more, m2 = sample_segments(path, cfg, starts_s=cand) if cand else (np.empty(0), {})
+        except ShortVideo:  # no further full segment fits in the clip
+            more, m2 = np.empty(0), {}
+        for s, st in zip(more, m2.get("segment_starts_s", [])):
+            if not is_graphic(s, cfg):
+                keep = [(s, st)]
+                break
+    if not keep:
+        raise GraphicsOnly(
+            f"every 2 s segment in the first {cfg['graphics_search_s']:.0f} s looks like a title "
+            "card or graphic; the AI-video detector was not run"
+        )
+    meta.update(n_segments=len(keep), segment_starts_s=[st for _, st in keep])
+    return np.stack([s for s, _ in keep]), meta
 
 
 # -------------------------------------------------------------- embedding ---
@@ -545,8 +608,13 @@ def analyze(
             warnings += w
         report(0.55, "scoring frames with the vision model")
         try:
-            seg_emb, meta = segment_embeddings(src, embedder, cfg, use_cache=use_cache)
-        except (UnreadableVideo, ShortVideo) as exc:
+            if cfg.get("graphics_guard"):
+                frames, meta = guarded_segments(src, cfg)
+                s_, n_ = frames.shape[:2]
+                seg_emb = embedder.embed(frames.reshape(s_ * n_, *frames.shape[2:])).reshape(s_, n_, -1)
+            else:
+                seg_emb, meta = segment_embeddings(src, embedder, cfg, use_cache=use_cache)
+        except (UnreadableVideo, ShortVideo, GraphicsOnly) as exc:
             return AIGenResult(None, None, thr, "unknown", feature_set=bundle["feature_set"],
                                warnings=warnings + [f"{exc.code}: {exc}"])
     scores = segment_scores(seg_emb, bundle)
@@ -560,13 +628,26 @@ def analyze(
             f"W_SHORT_CLIP: {n_seg} of the {cfg['max_segments']} segments the model was "
             "evaluated with fit in this clip; lower confidence"
         )
+    skipped = int(meta.get("n_graphic_skipped", 0))
+    starts = meta.get("segment_starts_s") or [0.0]
+    if skipped:
+        warnings.append(
+            f"W_GRAPHICS_SKIPPED: {skipped} segment{'s' if skipped != 1 else ''} looked like a title "
+            f"card or graphic and {'were' if skipped != 1 else 'was'} not scored"
+            + (f"; scored the {seg_s:.0f} s segment at {starts[0]:.1f} s instead" if n_seg == 1 else "")
+        )
     if dur > n_seg * seg_s + 1.0:
         # The bundle is scored the way it was evaluated (train_segments); a
         # long clip is therefore judged on part of its length only.
-        where = "the first" if n_seg == 1 else f"{n_seg} evenly spaced"
+        if n_seg == 1:
+            where = "the first" if starts[0] < seg_s / 2 else f"the {starts[0]:.1f} s"
+        else:
+            where = f"{n_seg} evenly spaced"
         warnings.append(
-            f"W_PARTIAL_COVERAGE: scored on {where} {seg_s:.0f} s segment"
-            f"{'' if n_seg == 1 else 's'} of a {dur:.1f} s clip"
+            (f"W_PARTIAL_COVERAGE: scored on {where} {seg_s:.0f} s segment"
+             f"{'' if n_seg == 1 else 's'} of a {dur:.1f} s clip") if not where.endswith(" s") else
+            f"W_PARTIAL_COVERAGE: scored on one {seg_s:.0f} s segment (starting at "
+            f"{starts[0]:.1f} s) of a {dur:.1f} s clip"
         )
     return AIGenResult(
         real_percentile=pct,

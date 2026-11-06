@@ -176,7 +176,9 @@ def _tiny_bundle(feature_set="geometry"):
     ref = np.sort(s if list(model.classes_)[1] == "ai" else -s)
     return {"model": model, "feature_set": feature_set,
             "threshold": float(np.quantile(ref, 0.95)), "real_reference_scores": ref,
-            "config": {"img_size": 32, "cache_dir": None, "max_segments": 1}}
+            # the synthetic clip is one flat colour: the title-card guard
+            # (docs/12 item A) would rightly skip it, so these tests turn it off
+            "config": {"img_size": 32, "cache_dir": None, "max_segments": 1, "graphics_guard": False}}
 
 
 def test_analyze_returns_a_scored_result(tmp_path):
@@ -267,3 +269,61 @@ def test_missing_aigen_extra_raises_model_missing_with_install_steps(monkeypatch
 def test_find_bundle_returns_none_when_absent(tmp_path, monkeypatch):
     monkeypatch.setattr(aigen, "BUNDLE_SEARCH_PATHS", [tmp_path / "nope.joblib"])
     assert aigen.find_bundle() is None
+
+
+# ------------------------------------------------- title-card guard (docs/12 A)
+
+def _write(path, frames, fps=8.0):
+    import cv2
+
+    h, w = frames[0].shape[:2]
+    vw = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
+    for f in frames:
+        vw.write(f)
+    vw.release()
+    return path
+
+
+def _card(seed=0):
+    import cv2
+
+    f = np.zeros((240, 320, 3), np.uint8)
+    cv2.putText(f, "This footage is not real", (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+    return f
+
+
+def _texture(seed):
+    rng = np.random.default_rng(seed)
+    return rng.integers(0, 256, (240, 320, 3), dtype=np.uint8)
+
+
+def test_is_graphic_tells_title_cards_from_textured_video():
+    cfg = aigen.merged_config({"img_size": 64})
+    card = np.stack([_card()] * 4)
+    tex = np.stack([_texture(i) for i in range(4)])
+    assert aigen.is_graphic(card, cfg)
+    assert not aigen.is_graphic(tex, cfg)
+
+
+def test_guard_skips_an_opening_title_card(tmp_path):
+    frames = [_card()] * 24 + [_texture(i) for i in range(40)]  # 3 s card, then 5 s of texture
+    p = _write(tmp_path / "v.mp4", frames)
+    cfg = aigen.merged_config({"img_size": 64, "max_segments": 1, "cache_dir": None})
+    segs, meta = aigen.guarded_segments(p, cfg)
+    assert meta["n_graphic_skipped"] == 1 and len(segs) == 1
+    assert meta["segment_starts_s"][0] > 1.8  # moved past the card
+    assert not aigen.is_graphic(segs[0], cfg)
+
+
+def test_guard_reports_graphics_only(tmp_path):
+    from trubeat.errors import GraphicsOnly
+
+    p = _write(tmp_path / "v.mp4", [_card()] * 40)
+    with pytest.raises(GraphicsOnly):
+        aigen.guarded_segments(p, aigen.merged_config({"img_size": 64, "max_segments": 1, "cache_dir": None}))
+
+
+def test_guard_leaves_natural_video_alone(tmp_path):
+    p = _write(tmp_path / "v.mp4", [_texture(i) for i in range(40)])
+    _, meta = aigen.guarded_segments(p, aigen.merged_config({"img_size": 64, "max_segments": 1, "cache_dir": None}))
+    assert meta["n_graphic_skipped"] == 0 and meta["segment_starts_s"] == [0.0]

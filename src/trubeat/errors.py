@@ -23,6 +23,12 @@ class NoFace(TrueBeatError):
     code = "E_NO_FACE"
 
 
+class GraphicsOnly(TrueBeatError):
+    """Every candidate segment is a title card or graphic (docs/12 item A)."""
+
+    code = "E_GRAPHICS_ONLY"
+
+
 class ModelMissing(TrueBeatError):
     """A model the analysis needs is not in the local cache. Analysis never
     downloads (AGENTS.md §7); `trubeat fetch-models` does, on request."""
