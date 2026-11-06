@@ -163,6 +163,18 @@ bootstrap intervals on every AUC; Wilson intervals on every rate.
 first segments; held-out AI-video numbers are then recomputed and must not
 change by more than the flagged share.
 
+*Result and revision (2026-11-06, `scripts/check_graphics_guard.py` →
+`reports/graphics_guard.md`):* the flatness-only rule flagged **140 /
+8,655 = 1.62%** of first segments, 134 of them AI clips with smooth, flat
+scenes; **not adopted**. It did flag exactly the RepresentUs end cards
+(4 of 26 segments). Revision, fixed here before the re-check, chosen on
+the training pool and the RepresentUs clip only: a graphic segment must
+also be **still**, mean absolute grey-level change between consecutive
+sampled frames < **0.5** (the end cards measure 0.00–0.23; the 119
+flagged pool clips have median 2.6, lower quartile 1.15). Same rule for
+the re-check: adopt only if < 0.5% of all 8,655 first segments are
+flagged.
+
 ## 7. Order of work
 
 | phase | what | where | done when |
