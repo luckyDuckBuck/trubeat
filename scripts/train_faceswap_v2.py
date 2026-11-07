@@ -1298,6 +1298,7 @@ def cmd_select(a) -> None:
         "metrics": {k: (list(v) if isinstance(v, tuple) else v) for k, v in M.items()},
         "gates": g, "in_domain_oof_auc": in_domain, "created": time.strftime("%Y-%m-%d %H:%M"),
         "versions": versions(), "backbone_sha256": weights_sha(b), "round": 4,
+        "sklearn_version": versions()["sklearn"],   # checked on load (trubeat.bundles, docs/13 D-05)
         "terms": ("trained on FaceForensics++ (non-commercial research use, per its terms of use) and DF40 "
                   "(CC BY-NC 4.0)"),
     }

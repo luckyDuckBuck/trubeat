@@ -568,12 +568,15 @@ def find_bundle(path: str | Path | None = None) -> dict | None:
 
 
 def load_bundle(path: str | Path) -> dict:
-    import joblib
+    """Load a bundle; a scikit-learn version mismatch is kept under
+    ``bundles.WARNINGS_KEY`` and reported by :func:`analyze` (docs/13 D-05)."""
+    from .bundles import WARNINGS_KEY, load_checked
 
-    bundle = joblib.load(path)
+    bundle, load_warnings = load_checked(path)
     for key in ("model", "feature_set", "config", "threshold"):
         if key not in bundle:
             raise ValueError(f"aigen bundle {path} is missing {key!r}")
+    bundle[WARNINGS_KEY] = load_warnings
     return bundle
 
 
@@ -665,7 +668,10 @@ def analyze(
     cfg["max_segments"] = int(cfg.get("max_segments", 3))
     embedder = embedder or Embedder(cfg)
     thr = float(bundle["threshold"])
-    warnings: list[str] = []
+    from .bundles import WARNINGS_KEY
+
+    # first, so a failure stays the last warning (the app quotes it)
+    warnings: list[str] = list(bundle.get(WARNINGS_KEY) or [])  # e.g. W_SKLEARN_VERSION (load_bundle)
     with tempfile.TemporaryDirectory(prefix="trubeat_aigen_") as tmp:
         src = Path(path)
         pending = region            # cropped by ffmpeg when it re-encodes, else while decoding

@@ -67,6 +67,7 @@ def cmd_hr(args):
 
 def cmd_train(args):
     import joblib
+    import sklearn
 
     config = load_config(args.config)
     manifest = pd.read_csv(args.manifest)
@@ -100,6 +101,7 @@ def cmd_train(args):
             "feature_columns": cols,
             "method": config.get("method", "pos"),
             "window_s": float(config.get("window_s", 10.0)),
+            "sklearn_version": sklearn.__version__,  # checked on load (trubeat.bundles)
         },
         out,
     )
@@ -108,18 +110,22 @@ def cmd_train(args):
 
 
 def _load_bundle(path):
-    import joblib
+    """(model, saved config, load warnings such as W_SKLEARN_VERSION)."""
+    from .bundles import load_checked
 
-    bundle = joblib.load(path)
+    bundle, load_warnings = load_checked(path)
+    for w in load_warnings:
+        print(f"warning: {w}", file=sys.stderr)
     if isinstance(bundle, dict):
-        return bundle["model"], bundle.get("config", {})
-    return bundle, {}
+        return bundle["model"], bundle.get("config", {}), load_warnings
+    return bundle, {}, load_warnings
 
 
 def cmd_predict(args):
-    model, saved_config = _load_bundle(args.model)
+    model, saved_config, load_warnings = _load_bundle(args.model)
     config = load_config(args.config) if args.config else saved_config
     pred = modelmod.predict_video(args.video, model, config)
+    pred.warnings[:0] = load_warnings
     print(json.dumps(_jsonable(pred.to_json())))
 
 
@@ -140,7 +146,7 @@ def cmd_eval(args):
     else:
         if not args.model:
             sys.exit("eval --task detect requires --model")
-        model, _ = _load_bundle(args.model)
+        model, _, _ = _load_bundle(args.model)  # load warnings go to stderr
         report = evalmod.evaluate_detector(manifest, model, config)
         summary = {"accuracy": report.accuracy, "auc": report.auc,
                    "fpr_on_real": report.fpr_on_real}

@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from types import ModuleType
 
 import numpy as np
 
@@ -27,8 +26,9 @@ sys.path.insert(0, str(REPO_ROOT / "tests"))
 sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(REPO_ROOT / "third_party" / "rppg-toolbox"))
 
-import synth  # noqa: E402
-from trubeat import hr, ingest, signal  # noqa: E402
+import synth
+
+from trubeat import hr, ingest, signal
 
 
 def _whole_frame_traces(frames: np.ndarray) -> np.ndarray:

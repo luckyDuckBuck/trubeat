@@ -3,6 +3,8 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import synth
 
@@ -60,9 +62,13 @@ def test_unverified_ai_manifest_carries_a_warning():
 
 
 def test_plain_video_has_no_c2pa(tmp_path):
+    # the reader itself must say "none": without the library the same
+    # result came back with W_NO_C2PA_LIB and the test proved nothing (D-02)
+    pytest.importorskip("c2pa")
     p = synth.write_pulse_video(tmp_path / "v.mp4", fps=30.0, duration_s=2.0)
     r = provenance.read_provenance(p)
     assert not r.has_c2pa and not r.ai_declared
+    assert r.warnings == []
 
 
 def test_missing_file_never_raises(tmp_path):

@@ -140,14 +140,28 @@ def test_bootstrap_auc_ci_brackets_truth():
     assert hi == pytest.approx(1.0)
 
 
-def test_bootstrap_auc_ci_respects_grouping():
+def test_bootstrap_auc_ci_respects_grouping(monkeypatch):
     # 4 groups, each with a real + a fake: the CI must come from whole
-    # groups, never a real paired with another group's fake.
+    # groups, never a real paired with another group's fake. Each group's
+    # pair carries its own offset k, so every resample shows which groups
+    # it drew: the reals' offsets must equal the fakes' offsets.
     labels = ["real", "fake"] * 4
-    values = [0.9, 0.1] * 4
+    values = [v + k for k in (0, 10, 20, 30) for v in (0.9, 0.1)]
     s = _scores(labels, values, groups=["g0", "g0", "g1", "g1", "g2", "g2", "g3", "g3"])
+    drawn = []
+    real_auc = detector.roc_auc_score
+
+    def spy(y, x):
+        drawn.append((np.asarray(y).copy(), np.asarray(x).copy()))
+        return real_auc(y, x)
+
+    monkeypatch.setattr(detector, "roc_auc_score", spy)
     lo, hi = detector.bootstrap_auc_ci(s, threshold=0.5, n_boot=50, seed=1)
-    assert lo <= 1.0 and hi <= 1.0
+    assert len(drawn) == 50  # whole groups: no resample ever lacks a class
+    for y, x in drawn:
+        assert sorted(np.round(x[y == 1] - 0.9)) == sorted(np.round(x[y == 0] - 0.1))
+    # any draw of whole groups ranks at least (1 + 1/4) / 2 of its pairs right
+    assert 0.625 <= lo <= hi <= 1.0
 
 
 def test_per_method_auc():
@@ -188,15 +202,22 @@ def test_fit_with_group_cv_is_grouped():
     assert hasattr(pipe, "decision_function")
 
 
+@pytest.mark.filterwarnings("ignore::sklearn.exceptions.UndefinedMetricWarning")
 def test_fit_with_group_cv_single_class_fold_is_not_a_crash():
     # A fold with one class makes the fold AUC undefined; the helper must
-    # still return a usable pipeline (NaN AUC, no exception).
+    # still return a usable pipeline (NaN AUC, no exception). Three groups,
+    # so each is one fold's test set: g0 holds reals only, g1 and g2 both
+    # classes (every training side keeps both classes).
+    from sklearn.model_selection import GroupKFold
+
     rng = np.random.default_rng(3)
-    n = 40
-    groups = np.repeat([f"g{i}" for i in range(8)], 5)
-    vals = rng.normal(0.5, 0.1, n)
-    y = np.array(["real" if v > 0.5 else "fake" for v in vals])
+    groups = np.repeat(["g0", "g1", "g2"], 10)
+    vals = rng.normal(0.5, 0.1, 30)
+    y = np.array(["real"] * 10 + ["real", "fake"] * 10)
     X = pd.DataFrame({"lag0_mean": vals})
-    pipe, auc, _std = detector.fit_with_group_cv(X, y, groups, "logreg")
-    assert pipe is not None
-    assert not np.isnan(auc) or True  # may be NaN; must not raise
+    folds = list(GroupKFold(3).split(X, y, groups))
+    assert any(len(set(y[te])) == 1 for _, te in folds)  # the case under test occurs
+    assert all(len(set(y[tr])) == 2 for tr, _ in folds)
+    pipe, auc, std = detector.fit_with_group_cv(X, y, groups, "logreg")
+    assert np.isnan(auc) and np.isnan(std)  # undefined, reported as such
+    assert set(pipe.predict(X)) <= {"real", "fake"}  # fitted on all rows, usable

@@ -105,15 +105,13 @@ def main() -> None:
     #    same number of files.
     fake_files = []
     per_method_count = {m: 0 for m in METHODS}
-    method_idx = 0
-    for a, b in wanted_pairs:
+    for method_idx, (a, b) in enumerate(wanted_pairs):
         if all(c >= args.fakes_per_method for c in per_method_count.values()):
             break
         # pick the method that is furthest behind
         method = min(METHODS, key=lambda m: per_method_count[m])
         # alternate which id of the pair is the target
         target, source = (a, b) if (method_idx % 2 == 0) else (b, a)
-        method_idx += 1
         name = f"{target}_{source}"
         dest = (root / "manipulated_sequences" / method / args.quality / "videos"
                 / f"{name}.mp4")

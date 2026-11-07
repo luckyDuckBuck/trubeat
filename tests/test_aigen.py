@@ -6,6 +6,7 @@ duration and frame rate. The backbone test runs only when timm and the
 DINOv2 weights are already cached (no network in tests).
 """
 
+import shutil
 import sys
 from pathlib import Path
 
@@ -213,6 +214,66 @@ def test_analyze_short_clip_is_unknown_not_a_crash(tmp_path):
     res = aigen.analyze(p, _tiny_bundle(), embedder=_StubEmbedder())
     assert res.label == "unknown" and res.real_percentile is None
     assert any("E_SHORT_VIDEO" in w for w in res.warnings)
+
+
+# ----------------------------------- inference re-encode (docs/13 D-24) -----
+
+
+def _decoded(monkeypatch):
+    """Record the file the analysis decoded and its frame size."""
+    seen = []
+    real = aigen.sample_segments
+
+    def spy(path, config=None, *args, **kwargs):
+        frames, meta = real(path, config, *args, **kwargs)
+        seen.append((Path(path), meta["width"], meta["height"]))
+        return frames, meta
+
+    monkeypatch.setattr(aigen, "sample_segments", spy)
+    return seen
+
+
+def _normalising_bundle():
+    bundle = _tiny_bundle()
+    bundle["config"]["normalize"] = {"short_side": 120, "crf": 28, "preset": "veryfast"}
+    return bundle
+
+
+def test_without_ffmpeg_the_clip_is_scored_as_is_and_says_so(tmp_path, monkeypatch):
+    p = synth.write_pulse_video(tmp_path / "v.mp4", fps=30.0, duration_s=5.0)  # 320 x 240
+    seen = _decoded(monkeypatch)
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    res = aigen.analyze(p, _normalising_bundle(), embedder=_StubEmbedder())
+    assert res.label in ("ai", "real")
+    assert res.warnings[0].startswith("W_NO_FFMPEG: analysed as-is")
+    assert seen == [(p, 320, 240)]  # the upload itself, at its own size
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+def test_with_ffmpeg_the_clip_is_re_encoded_to_the_training_format(tmp_path, monkeypatch):
+    p = synth.write_pulse_video(tmp_path / "v.mp4", fps=30.0, duration_s=5.0)  # 320 x 240
+    seen = _decoded(monkeypatch)
+    res = aigen.analyze(p, _normalising_bundle(), embedder=_StubEmbedder())
+    assert res.label in ("ai", "real")
+    assert not any(w.startswith(("W_NO_FFMPEG", "W_NORMALIZE_FAILED")) for w in res.warnings), res.warnings
+    [(path, w, h)] = seen
+    assert path.name == "normalized.mp4" and (w, h) == (160, 120)  # short side 120, aspect kept
+
+
+def test_a_failed_re_encode_falls_back_to_the_clip_as_is(tmp_path, monkeypatch):
+    import subprocess
+
+    def fail(*args, **kwargs):
+        raise subprocess.CalledProcessError(1, "ffmpeg")
+
+    p = synth.write_pulse_video(tmp_path / "v.mp4", fps=30.0, duration_s=5.0)
+    seen = _decoded(monkeypatch)
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(subprocess, "run", fail)
+    res = aigen.analyze(p, _normalising_bundle(), embedder=_StubEmbedder())
+    assert res.label in ("ai", "real")
+    assert res.warnings[0] == "W_NORMALIZE_FAILED: analysed as-is (CalledProcessError)"
+    assert seen == [(p, 320, 240)]
 
 
 # ----------------------------------------------- real backbone (if cached) --

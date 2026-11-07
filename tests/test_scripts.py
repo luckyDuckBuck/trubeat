@@ -1,4 +1,6 @@
-"""Tests for scripts/build_manifest.py and scripts/cache_traces.py.
+"""Tests for scripts/build_manifest.py, scripts/cache_traces.py and the
+leakage check of the AI-video scripts (train_aigen, eval_multiseg,
+compare_aigen_models).
 
 Builds synthetic dataset trees (no real data) and checks the manifests
 and caches come out with the right schema, grouping, and splits.
@@ -159,3 +161,72 @@ def test_cache_traces_roundtrip_and_resume(tmp_path, monkeypatch, capsys):
     )
     ct.main()
     assert "skipped=2" in capsys.readouterr().out
+
+
+# ---------------- AI-video scripts: the leakage validator runs first (docs/13 B-03)
+
+
+def _ai_rows(**columns):
+    import pandas as pd
+
+    rows = pd.DataFrame({
+        "path": ["/d/a.mp4", "/d/b.mp4", "/d/c.mp4", "/d/d.mp4"],
+        "label": ["ai", "real", "ai", "real"],
+        "generator": ["kling", "real", "kling", "real"],
+        "source": ["aigvdbench", "aigvdbench", "genbuster_ood", "genbuster_id"],
+        "family": ["aigvd", "real", "ood", "id"],
+        "split_group": ["openvid:1", "openvid:1", "genbuster:ood:kling:1", "genbuster:id:real:2"],
+        "role": ["pool", "pool", "external", "external"],
+    })
+    return rows.assign(**columns)
+
+
+LEAKY_GROUPS = ["openvid:1", "openvid:1", "openvid:1", "genbuster:id:real:2"]
+
+
+def test_aigen_role_check_refuses_identity_and_source_leakage():
+    ta = _load("train_aigen")
+    ta.check_roles(_ai_rows())
+    with pytest.raises(ValueError, match="identity leakage"):  # one group on both sides
+        ta.check_roles(_ai_rows(split_group=LEAKY_GROUPS))
+    with pytest.raises(ValueError, match="source leakage"):  # one file on both sides
+        ta.check_roles(_ai_rows(path=["/d/a.mp4", "/d/b.mp4", "/d/a.mp4", "/d/d.mp4"]))
+    with pytest.raises(ValueError, match="unknown role"):
+        ta.check_roles(_ai_rows(role=["pool", "pool", "external", "holdout"]))
+
+
+def test_train_aigen_validates_before_any_clip_is_processed(tmp_path, monkeypatch):
+    import sys
+
+    ta = _load("train_aigen")
+    paths = []
+    for name in "abcd":
+        (tmp_path / f"{name}.mp4").write_bytes(b"x")
+        paths.append(str(tmp_path / f"{name}.mp4"))
+    # roles come from the source (genbuster -> external); the groups leak
+    _ai_rows(path=paths, split_group=LEAKY_GROUPS).drop(columns="role").to_csv(tmp_path / "aigen.csv", index=False)
+    monkeypatch.setattr(ta, "normalize_all", lambda *a, **k: pytest.fail("clips processed before the check"))
+    monkeypatch.setattr(sys, "argv", [
+        "train_aigen.py", "--manifest", str(tmp_path / "aigen.csv"), "--ffpp-manifest", str(tmp_path / "no.csv"),
+        "--model-out", str(tmp_path / "m.joblib"), "--report", str(tmp_path / "r.md"),
+        "--features", str(tmp_path / "f.pkl")])
+    with pytest.raises(ValueError, match="identity leakage"):
+        ta.main()
+    assert not (tmp_path / "m.joblib").exists()
+
+
+def test_aigen_evaluation_scripts_validate_before_scoring(tmp_path, monkeypatch):
+    """compare_aigen_models and eval_multiseg read a saved features table:
+    the check runs before the bundle is even opened (it does not exist)."""
+    import sys
+
+    feats = tmp_path / "features.pkl"
+    _ai_rows(split_group=LEAKY_GROUPS).to_pickle(feats)
+    missing = str(tmp_path / "no_bundle.joblib")
+    with pytest.raises(ValueError, match="identity leakage"):
+        _load("compare_aigen_models").evaluate(missing, str(feats))
+    ms = _load("eval_multiseg")
+    monkeypatch.setattr(sys, "argv", ["eval_multiseg.py", "--features", str(feats), "--model", missing,
+                                      "--out", str(tmp_path / "r.md")])
+    with pytest.raises(ValueError, match="identity leakage"):
+        ms.main()

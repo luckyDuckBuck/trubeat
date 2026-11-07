@@ -117,7 +117,7 @@ def main() -> None:
             "",
             f"- manifest: `{args.manifest}`",
             f"- trace cache: `{args.traces}`",
-            f"- method: pos (cache key includes ROI set + method + frame height)",
+            "- method: pos (cache key includes ROI set + method + frame height)",
             "",
             "## Totals",
             "",
@@ -137,8 +137,8 @@ def main() -> None:
                 f"- min `face_valid_frac`: {cached['face_valid_frac'].min():.4f}",
                 f"- mean `mean_snr`: **{cached['mean_snr'].mean():.2f}**",
                 f"- median `mean_snr`: {cached['mean_snr'].median():.2f}",
-                f"- min / max `mean_snr`: {cached['mean_snr'].min():.2f} / "
-                f"{cached['mean_snr'].max():.2f}",
+                (f"- min / max `mean_snr`: {cached['mean_snr'].min():.2f} / "
+                 f"{cached['mean_snr'].max():.2f}"),
                 "",
             ]
         excl = out_df[~out_df["usable"]]

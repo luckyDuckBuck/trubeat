@@ -20,15 +20,16 @@ import sys
 import unittest.mock
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "tests"))
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-import synth  # noqa: E402 (tests/synth.py)
-from trubeat import cli, eval as evalmod  # noqa: E402
+import synth  # tests/synth.py
+
+from trubeat import cli
+from trubeat import eval as evalmod
 
 
 def stage_subjects(root: Path, specs: list[tuple[str, float]]) -> pd.DataFrame:
@@ -68,8 +69,7 @@ def run(config_path: Path, report: str) -> dict:
                                          h=frames.shape[1],
                                          w=frames.shape[2])
 
-    # Build the config the way cli.load_config does (band list → tuple)
-    config = cli.load_config(config_path)
+    # cmd_eval loads the config itself (cli.load_config: band list → tuple)
     args = argparse.Namespace(
         dataset=str(REPO_ROOT / "data" / "manifests" / "dryrun_ubfc.csv"),
         config=str(config_path), task="hr", model=None,

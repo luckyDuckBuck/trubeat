@@ -289,12 +289,13 @@ def load_detector(model_path: Path | str | None = DEFAULT_MODEL_PATH):
     pulse (heart rate, inter-region agreement, QC) and says so.
     """
     def load(path: Path) -> dict:
-        import joblib
+        from .bundles import WARNINGS_KEY, load_checked
 
-        bundle = joblib.load(path)
-        if isinstance(bundle, dict) and "model" in bundle:
-            return bundle
-        return {"model": bundle, "config": {}, "threshold": 0.0}
+        bundle, load_warnings = load_checked(path)   # W_SKLEARN_VERSION (docs/13 D-05)
+        if not (isinstance(bundle, dict) and "model" in bundle):
+            bundle = {"model": bundle, "config": {}, "threshold": 0.0}
+        bundle[WARNINGS_KEY] = load_warnings
+        return bundle
 
     return _pick_bundle(model_path, MODEL_SEARCH_PATHS, load, "pulse detector")
 
@@ -584,6 +585,10 @@ def _pulse_layer(
     # The G2 bundle decides the rPPG method and window (it was trained with
     # them; using the config's would feed the model the wrong features).
     bundle = load_detector(model_path)
+    if bundle is not None:
+        from .bundles import WARNINGS_KEY
+
+        a.warnings += [w for w in bundle.get(WARNINGS_KEY, []) if w not in a.warnings]
     try:
         if bundle is not None:
             method = str(bundle.get("method") or config.get("method", "green"))

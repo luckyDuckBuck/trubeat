@@ -2,46 +2,119 @@
 name = "trubeat"
 version = "0.1.0"
 description = "rPPG-based deepfake detector (FakeCatcher-style rebuild)"
-requires-python = ">=3.11,<3.13"  # mediapipe 0.10.21 ships cp312 wheels (verified)
+requires-python = ">=3.11,<3.13"  # mediapipe 0.10.21 ships cp311 and cp312 wheels (verified)
+# The code is MIT. The models in src/trubeat/models/ are not all MIT (NOTICE,
+# docs/13 D-04): detector.joblib, aigen.joblib and faceswap.joblib were
+# trained with FaceForensics++ data and are for non-commercial research and
+# educational use only; face_landmarker.task is Apache-2.0. Add CC-BY-NC-4.0
+# here if a bundle trained on DF40 ships.
+license = "MIT AND Apache-2.0 AND LicenseRef-FaceForensics-NonCommercial"
+license-files = ["LICENSE", "NOTICE"]
 dependencies = [
   "numpy<2.0",            # MediaPipe 0.10.x breaks on NumPy 2 — do not lift
-  "opencv-python-headless==4.9.0.80",  # headless: CI-safe, no imshow anywhere
-  "opencv-contrib-python==4.9.0.80",   # mediapipe dep; pinned to match headless
-                                       # (mixed cv2 versions shift cv2's files)
+  # One OpenCV distribution (docs/13 D-11): mediapipe requires
+  # opencv-contrib-python, and a second one (the headless build) would
+  # install into the same cv2/ package. It provides cv2.FaceDetectorYN.
+  "opencv-contrib-python==4.9.0.80",
   "scipy>=1.11,<1.13",    # Welch/PPG numerics move after 1.13 — the G2
                           # calibration (hr/snr/agreement scale) was measured
                           # on 1.12.0; keep installs bit-comparable
   "mediapipe==0.10.21",
-  "scipy>=1.11",
-  "scikit-learn>=1.3",
+  # The shipped bundles are scikit-learn 1.9.1 pickles; a bundle saved with
+  # another major.minor loads with W_SKLEARN_VERSION (docs/13 D-05).
+  "scikit-learn>=1.9.1,<2",
   "pandas",
   "pyyaml",
   "matplotlib",
+  "c2pa-python",          # Content Credentials reader (provenance layer, offline)
 ]
 
 [project.optional-dependencies]
 # Phase 4 / future — not needed for the pipeline or tests
 serving = ["fastapi", "uvicorn[standard]", "gradio"]
 tracking = ["mlflow", "dvc"]  # local file store / dataset versioning
-# "torch",             # Phase 3 — install per https://pytorch.org for your platform
 # Reference-harness runtime for third_party/rppg-toolbox cross-checks only
 # (NOT a pipeline dependency). Must stay <0.23: scikit-image 0.23+ forces
 # numpy>=2, which violates the numpy<2.0 pin above (learned 2026-10-18).
 toolbox_ref = ["scikit-image>=0.22,<0.23"]
-# Phase D whole-frame AI-video detector (docs/11). Install torch from the
-# CPU index first, or pip pulls ~3 GB of CUDA wheels:
-#   uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-aigen = ["torch", "torchvision", "timm", "c2pa-python"]
+# The AI-video and face-swap detectors (docs/11, docs/12). uv takes torch and
+# torchvision from the CPU index on Linux ([tool.uv.sources]); with pip,
+# install them from that index first, or pip pulls ~3 GB of CUDA wheels:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+aigen = ["torch", "torchvision", "timm"]
 
 [project.scripts]
 trubeat = "trubeat.cli:main"
 
+[dependency-groups]
+# Installed by `uv sync` / `uv run`; CI lints with this exact ruff.
+dev = [
+  "pytest>=9.1",
+  "ruff==0.17.4",         # its default rule set is written out in [tool.ruff.lint]
+]
+
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27"]  # PEP 639 license expression and license-files
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/trubeat"]
+
+[tool.uv]
+# Lock only versions with a wheel for Linux x86_64 (the laptop, CI), Windows
+# x64 and Apple-silicon macOS: c2pa-python 0.38.2 ships macOS wheels only and
+# 0.38.1 no Windows wheel, so the lock takes 0.38.1 on Linux, 0.38.0 on Windows.
+required-environments = [
+  "sys_platform == 'linux' and platform_machine == 'x86_64'",
+  "sys_platform == 'win32' and platform_machine == 'AMD64'",
+  "sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
+
+# torch and torchvision from the CPU-only index on Linux, where PyPI's wheels
+# pull ~3 GB of CUDA libraries this CPU pipeline never uses (docs/13 D-06).
+# PyPI's macOS and Windows wheels are CPU builds already.
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+torchvision = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.ruff]
+line-length = 120
+# notebooks/kaggle/*.py are kernel bodies that scripts/kaggle_run.py joins to
+# common.py (their names are defined there); they are not linted alone.
+extend-exclude = ["notebooks"]
+
+[tool.ruff.lint]
+# ruff 0.17's default rule set, written out (docs/13 D-10): src/, tests/ and
+# scripts/ pass it, and spelling it out keeps another ruff version checking
+# the same rules as CI's pinned one. Families are selected whole; `ignore`
+# lists the rules of those families that the 0.17 default leaves out.
+select = [
+  "ASYNC", "B", "BLE", "C4", "EXE", "F", "FA", "FLY", "FURB", "INT", "LOG", "PIE",
+  "PLC", "PLE", "PLR", "PLW", "PYI", "RUF", "SIM", "TRY", "UP", "YTT",
+  "D419", "DTZ002", "DTZ003", "DTZ004", "E722", "E902", "G010", "G101", "G201", "G202",
+  "I001", "ISC004", "N999", "PERF101", "PERF102", "PERF402", "PGH005",
+  "PT010", "PT014", "PT020", "PT025", "PT026", "PT031", "PTH124", "PTH210", "RET501",
+  "S102", "S110", "S112", "T100", "TC004", "TC005", "TC007", "TC010", "W605",
+]
+ignore = [
+  "ASYNC109", "ASYNC110", "ASYNC212", "ASYNC240", "ASYNC250",
+  "B007", "B011", "B024", "B027", "B028", "B034", "B904", "B905", "B911", "B912",
+  "C416", "C420", "EXE003", "F403", "F405", "F722",
+  "FURB110", "FURB116", "FURB164", "FURB171", "FURB187", "LOG004", "LOG007",
+  "PLC0207", "PLC0415", "PLC1802", "PLC2401", "PLC2403", "PLE0237", "PLE0241", "PLE0302",
+  "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR0917", "PLR1714", "PLR2004", "PLR5501",
+  "PLW0108", "PLW0603", "PLW1641", "PLW2901", "PLW3301",
+  "PYI011", "PYI014", "PYI021", "PYI024", "PYI051", "PYI053", "PYI054", "PYI056",
+  "RUF001", "RUF002", "RUF003", "RUF005", "RUF006", "RUF021", "RUF036", "RUF037", "RUF043",
+  "RUF060", "RUF061", "RUF064", "RUF071", "RUF102", "RUF103", "RUF104",
+  "SIM105", "SIM108", "SIM109", "SIM110", "SIM112", "SIM116", "SIM212", "SIM300", "SIM910",
+  "TRY003", "TRY300", "TRY301", "TRY400", "UP013", "UP015", "UP042",
+]
 
 [tool.pytest.ini_options]
 # Only the project's tests: third_party/ holds reference clones whose own

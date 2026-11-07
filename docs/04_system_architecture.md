@@ -214,6 +214,10 @@ def read_provenance(path) -> ProvenanceResult  # has_c2pa, ai_declared, source_t
 #   capture deleted once analysed; Content Credentials decide only when their signature
 #   validates (Valid/Trusted), otherwise the claim is stated in the detail and the other layers
 #   decide.
+# bundles.py (2026-11-07, docs/13 D-05): load_checked(path) -> (obj, warnings): joblib.load plus
+#   W_SKLEARN_VERSION when the bundle's saved scikit-learn major.minor (its `sklearn_version` key,
+#   or the version sklearn reports while unpickling) differs from the installed one; the loaders
+#   keep the warnings under bundle["_warnings"] and every analysis using the bundle reports them.
 # claims.py (2026-11-07, docs/13 A-07): claims_for(bundle) -> dict | None (the bundle's own
 #   `claims`, else models/claims.json by the bundle file's SHA-256); about(rate) -> words;
 #   caveat(ai, pulse, fsd, fsd_mode) -> str. app: PulseAnalysis gains claims and caveat (the
@@ -276,7 +280,7 @@ trubeat/
 ## 7. Deployment views
 
 - **Phases 1–3 (dev):** laptop, `uv run trubeat …`, MLflow local, DVC local.
-- **Phase 4 (service):** Docker image (`python:3.11-slim`, headless OpenCV,
+- **Phase 4 (service):** Docker image (`python:3.11-slim` + `libgl1` for OpenCV,
   model weights baked in) → `uvicorn serve:app`; Gradio demo on the same host.
   Still offline-capable: no external calls in the request path.
 
@@ -306,6 +310,7 @@ evidence and never changes a verdict by itself:
 | `W_PULSE_SKIPPED` / `W_PULSE_FAILED` / `W_FACESWAP_FAILED` | pulse or face-swap layer did not run (e.g. `E_SHORT_VIDEO` under 10 s) or raised |
 | `W_UNSTABLE_TRACK` | the pulse layer tracked the face in fewer than 70% of frames; its face-swap check does not run (emitted by the app since 2026-11-07) |
 | `W_TRUNCATED` | the pulse layer analysed only the first part of the clip (120 s, or less when the decoded-frame budget ran out); says how much |
+| `W_SKLEARN_VERSION` | a model bundle was saved with another scikit-learn major.minor than the installed one; its scores may differ from the evaluated ones (emitted since 2026-11-07, docs/13 D-05) |
 | `W_GRAPHICS_SKIPPED` | the AI-video layer skipped title-card / graphic segments and scored a later one (docs/12 item A) |
 | `E_GRAPHICS_ONLY` | every candidate segment in the first 30 s was a graphic; the AI-video layer did not score |
 | `W_FEW_FACES` | the face-swap detector found a face in fewer than 4 of its 16 sampled frames; it does not decide |

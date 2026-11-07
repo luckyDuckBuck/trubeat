@@ -1,14 +1,70 @@
 name: ci
 on: [push, pull_request]
+
+permissions:
+  contents: read
+
 jobs:
-  test:
+  core:
+    # The package with its core dependencies only (no torch, no weights), on
+    # both supported Pythons, installed exactly as uv.lock pins it. Tests that
+    # need more skip and are listed under -rs; the full job runs them.
+    name: core (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.13.1"
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+      - name: System libraries (opencv-contrib-python loads libGL)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libgl1
+      - name: Install (core dependencies and the dev group, as locked)
+        run: uv sync --locked
+      - name: Lint (blocking; the tree stays lint-clean)
+        run: uv run --no-sync ruff check src tests scripts
+      - name: Tests
+        run: uv run --no-sync pytest -q -rs
+
+  full:
+    # Every layer the app runs (docs/13 D-01, D-02, D-12): the [aigen] and
+    # [serving] extras with CPU-only torch (the CPU index, [tool.uv.sources]),
+    # the backbone weights, ffmpeg and Node. Here a skipped test fails the run
+    # unless tests/conftest.py ALLOWED_SKIPS names it.
+    name: full (extras, weights, ffmpeg, Node)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v6
         with:
+          version: "0.13.1"
           python-version: "3.12"
-      - run: pip install pytest ruff
-      - run: ruff check src tests   # blocking: tree stays lint-clean
-      - run: pip install -e .   # core pipeline deps (headless cv2, mediapipe, …)
-      - run: PYTHONPATH=src pytest tests/ -q
+          enable-cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: System packages (ffmpeg; libGL for opencv-contrib-python)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg libgl1
+      - name: Install (core, aigen and serving extras, as locked)
+        run: uv sync --locked --extra aigen --extra serving
+      - name: Torch is the CPU build
+        run: uv run --no-sync python -c "import sys, torch; print(torch.__version__); sys.exit(torch.version.cuda is not None)"
+      - name: Cache the backbone weights
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface/hub
+          key: hf-${{ hashFiles('src/trubeat/models/*.joblib') }}
+          restore-keys: hf-
+      - name: Fetch the backbones the shipped bundles use (the only network step)
+        run: uv run --no-sync trubeat fetch-models
+      - name: Tests (a skip not in ALLOWED_SKIPS fails the run)
+        env:
+          HF_HUB_OFFLINE: "1"   # tests never touch the network
+        run: uv run --no-sync pytest -q -rs --fail-on-skip
+      - name: Extension harness
+        run: node tests/js/extension_test.mjs

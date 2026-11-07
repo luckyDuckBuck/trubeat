@@ -243,6 +243,7 @@ def main() -> None:
 
     # ---- 4. save the model bundle ---------------------------------------
     import joblib
+    import sklearn
 
     out_model = Path(args.model)
     out_model.parent.mkdir(parents=True, exist_ok=True)
@@ -258,6 +259,7 @@ def main() -> None:
             "window_s": best_cfg["win_s"],
             "classifier": best_cfg["kind"],
             "method": best_cfg["method"],
+            "sklearn_version": sklearn.__version__,  # checked on load (trubeat.bundles, docs/13 D-05)
         },
         out_model,
     )

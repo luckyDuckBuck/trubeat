@@ -126,7 +126,7 @@ do not start the next phase until the gate is met or consciously waived.
       per-window votes + bpm + warnings shown. *(M4.2a above supersedes the
       original sketch: the verdict is three-state with its evidence, not a
       bare label.)*
-- [ ] **M4.3 — Container.** Dockerfile (3.11-slim, headless OpenCV), one-command
+- [ ] **M4.3 — Container.** Dockerfile (3.11-slim + `libgl1` for OpenCV), one-command
       `docker run`.
 - **Gate G4:** `trubeat predict video.mp4` works end-to-end offline.
 

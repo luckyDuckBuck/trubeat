@@ -517,13 +517,16 @@ def find_bundle(path: str | Path | None = None) -> Path | None:
 
 
 def load_bundle(path: str | Path | None = None) -> dict | None:
-    import joblib
+    """Load a bundle; a scikit-learn version mismatch is kept under
+    ``bundles.WARNINGS_KEY`` and reported by :func:`analyze` (docs/13 D-05)."""
+    from .bundles import WARNINGS_KEY, load_checked
 
     p = find_bundle(path)
     if p is None:
         return None
-    b = joblib.load(p)
+    b, load_warnings = load_checked(p)
     b["_path"] = str(p)
+    b[WARNINGS_KEY] = load_warnings
     return b
 
 
@@ -567,8 +570,12 @@ def analyze(path: str | Path, bundle: dict, embedder: FaceEmbedder | CNNScorer |
     """Score one clip with a trained bundle. Never raises for bad input:
     unreadable clips and clips without enough faces come back as
     ``unknown`` / ``no_face`` with the reason in ``warnings``."""
+    from .bundles import WARNINGS_KEY
+
     cfg = merged_config(bundle["config"])
     thr = float(bundle["threshold"])
+    # first, so a failure stays the last warning (the app quotes it)
+    pre = list(bundle.get(WARNINGS_KEY) or [])  # e.g. W_SKLEARN_VERSION (load_bundle)
 
     def report(f: float, s: str) -> None:
         if progress is not None:
@@ -578,12 +585,12 @@ def analyze(path: str | Path, bundle: dict, embedder: FaceEmbedder | CNNScorer |
     try:
         sampled = sample_frames(path, int(cfg["n_frames"]), float(cfg["max_seconds"]), region=region)
     except UnreadableVideo as exc:
-        return FaceSwapResult(None, thr, "unknown", warnings=[f"{exc.code}: {exc}"])
+        return FaceSwapResult(None, thr, "unknown", warnings=[*pre, f"{exc.code}: {exc}"])
     if sampled.fps > 0 and sampled.duration_s < float(cfg["min_seconds"]):
         note = (f"{ShortVideo.code}: the clip is {sampled.duration_s:.1f} s; the face-swap detector "
                 f"needs at least {float(cfg['min_seconds']):.0f} s")
         return FaceSwapResult(None, thr, "unknown", n_sampled=len(sampled.frames),
-                              duration_s=sampled.duration_s, warnings=[note])
+                              duration_s=sampled.duration_s, warnings=[*pre, note])
     own_finder = finder is None
     finder = finder or FaceFinder(cfg)
     try:
@@ -596,7 +603,7 @@ def analyze(path: str | Path, bundle: dict, embedder: FaceEmbedder | CNNScorer |
     if len(crops) < int(cfg["min_faces"]):
         note = (f"W_FEW_FACES: a face was found in {len(crops)} of {len(sampled.frames)} sampled "
                 f"frames (needs {cfg['min_faces']})")
-        return FaceSwapResult(None, thr, "no_face", warnings=[note], **base)
+        return FaceSwapResult(None, thr, "no_face", warnings=[*pre, note], **base)
     report(0.75, "scoring the face crops")
     stack = np.stack([c.crop for c in crops])
     if bundle.get("kind") == "cnn":  # stage 2: a fine-tuned CNN scores each crop directly
@@ -613,5 +620,5 @@ def analyze(path: str | Path, bundle: dict, embedder: FaceEmbedder | CNNScorer |
     c = crops[top]
     frame = sampled.frames[sampled.index.index(c.frame_index)]
     return FaceSwapResult(score, thr, "swap" if score >= thr else "no_swap", pct,
-                          top_time_s=float(c.time_s), top_crop=c.crop, top_frame=frame,
+                          top_time_s=float(c.time_s), warnings=pre, top_crop=c.crop, top_frame=frame,
                           top_box=tuple(int(v) for v in c.box), **base)

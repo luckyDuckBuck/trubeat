@@ -136,15 +136,15 @@ def main() -> None:
         lines = [
             "# Test-split audit — downloaded → cached → usable → scored",
             "",
-            "Every count below is read from the filesystem and the manifests "
-            "by `scripts/audit_test_split.py`; none is carried by hand.",
+            ("Every count below is read from the filesystem and the manifests "
+             "by `scripts/audit_test_split.py`; none is carried by hand."),
             "",
             "## Per method",
             "",
-            "| method | label | on disk (all splits) | in manifest (all) | "
-            "test manifest | test cached | test usable | test excluded |",
-            "|--------|-------|-----------------------|------------------|"
-            "---------------|--------------|-------------|---------------|",
+            ("| method | label | on disk (all splits) | in manifest (all) | "
+             "test manifest | test cached | test usable | test excluded |"),
+            ("|--------|-------|-----------------------|------------------|"
+             "---------------|--------------|-------------|---------------|"),
         ]
         for _, r in df.iterrows():
             lines.append(
@@ -153,12 +153,12 @@ def main() -> None:
                 f"{r['test_cached']} | {r['test_usable']} | {r['test_excluded']} |"
             )
         lines += [
-            f"| **total** | | **{total['on_disk_all_splits']}** | "
-            f"**{total['in_manifest_all_splits']}** | "
-            f"**{total['test_manifest']}** | "
-            f"**{total['test_cached']}** | "
-            f"**{total['test_usable']}** | "
-            f"**{total['test_excluded']}** |",
+            (f"| **total** | | **{total['on_disk_all_splits']}** | "
+             f"**{total['in_manifest_all_splits']}** | "
+             f"**{total['test_manifest']}** | "
+             f"**{total['test_cached']}** | "
+             f"**{total['test_usable']}** | "
+             f"**{total['test_excluded']}** |"),
             "",
             "## Exclusion reasons in the test split",
             "",

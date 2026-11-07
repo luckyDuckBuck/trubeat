@@ -26,12 +26,14 @@ seed: 7
 # + sampling parameters).
 cache_dir: data/processed/aigen_emb
 
-# Training-time compression normalisation (docs/11 D5). The public sets
-# differ by an order of magnitude in bitrate between real and generated
-# clips, a shortcut that would flag every compressed web video as AI. Every
-# training clip, real and generated, is re-encoded the same way to roughly
-# web quality first. Inference takes the user's clip as-is (already
-# web-compressed). Robustness is measured separately at a harsher setting.
+# Compression normalisation (docs/11 D5). The public sets differ by an order
+# of magnitude in bitrate between real and generated clips, a shortcut that
+# would flag every compressed web video as AI. Every training clip, real and
+# generated, is re-encoded the same way to roughly web quality first, and so
+# is the user's clip at inference: aigen.analyze re-encodes it with these
+# settings (saved in the bundle) when ffmpeg is installed, and otherwise
+# scores it as-is with a W_NO_FFMPEG warning (docs/13 D-24). Robustness is
+# measured separately at a harsher setting.
 normalize:
   short_side: 360
   crf: 28
@@ -57,8 +59,8 @@ upscale_1080:           # resolution counterfactual: a higher-resolution source
   crf: 18
   preset: veryfast
   out_dir: data/processed/aigen_var_1080
-train_segments: 1       # one 2 s segment per training clip; inference scores up to
-                        # max_segments segments and averages the scores
+train_segments: 1       # 2 s segments per training clip; the bundle sets max_segments to
+                        # this, so inference scores the segments evaluation scored
 train_threads: 12       # total torch threads across training workers
 workers: 3              # parallel embed workers (each torch_threads/2 threads)
 target_fpr: 0.05        # operating point: at most 5% of real clips flagged

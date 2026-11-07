@@ -475,6 +475,7 @@ def gate_passed(bundle: dict, k: int) -> bool:
 
 def cmd_select(a) -> None:
     import joblib
+    import sklearn
     import train_aigen as ta
 
     warnings.filterwarnings("ignore")
@@ -535,6 +536,7 @@ def cmd_select(a) -> None:
         "gates": [(n_, ok_, v_) for n_, ok_, v_ in g], "in_domain_oof_auc": in_domain_auc,
         "created": time.strftime("%Y-%m-%d %H:%M"),
         "terms": "trained on FaceForensics++ (non-commercial research use, per its terms of use)",
+        "sklearn_version": sklearn.__version__,  # checked on load (trubeat.bundles, docs/13 D-05)
     }
     joblib.dump(bundle, out / "faceswap.joblib")
     n_noface = int((~ok[trainval]).sum())

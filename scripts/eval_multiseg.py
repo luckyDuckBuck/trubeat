@@ -44,6 +44,7 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
+import sklearn
 import yaml
 from sklearn.model_selection import GroupKFold
 
@@ -154,6 +155,7 @@ def main() -> None:
     cfgk = dict(cfg, max_segments=int(args.segments),
                 torch_threads=max(1, int(cfg["train_threads"]) // args.workers))
     data = pd.read_pickle(args.features).reset_index(drop=True)
+    ta.check_roles(data)  # AGENTS.md §6: no group or file in both pool and external (docs/13 B-03)
     bundle = joblib.load(args.model)
     C = float(bundle["model"][-1].C)
     paths = data.feat_path.tolist()
@@ -246,7 +248,7 @@ def main() -> None:
         m, thr, ref = fitted[best]
         nb = dict(bundle)
         nb.update(model=m, threshold=thr, real_reference_scores=ref,
-                  created=time.strftime("%Y-%m-%d %H:%M"),
+                  created=time.strftime("%Y-%m-%d %H:%M"), sklearn_version=sklearn.__version__,
                   selection=(f"{bundle.get('selection')}; whole-clip scoring '{best}' over "
                              f"{args.segments} segments adopted by scripts/eval_multiseg.py"))
         nb["config"] = dict(bundle["config"], max_segments=int(args.segments))

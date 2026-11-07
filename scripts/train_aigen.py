@@ -47,6 +47,7 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
+import sklearn
 import yaml
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
@@ -93,6 +94,27 @@ def load_rows(aigen_manifest: Path, ffpp_manifest: Path,
     df["path"] = [str(p if Path(p).is_absolute() else REPO / p) for p in df["path"]]
     df = df[[Path(p).is_file() for p in df["path"]]].reset_index(drop=True)
     return df
+
+
+ROLE_SPLIT = {"pool": "train", "external": "test"}
+
+
+def check_roles(rows: pd.DataFrame) -> None:
+    """The identity-leakage validator, before any fit or score (AGENTS.md §6,
+    docs/13 B-03). The pool trains, selects and sets the threshold; the
+    external set is scored once. No ``split_group`` (a source clip with every
+    clip generated from it, a prompt, a FaceForensics++ source sequence) and
+    no file may sit on both sides. Raises ValueError."""
+    from trubeat import eval as ev
+
+    bad = set(rows["role"]) - set(ROLE_SPLIT)
+    if bad:
+        raise ValueError(f"unknown role(s) {sorted(map(str, bad))}; expected one of {sorted(ROLE_SPLIT)}")
+    ev.validate_manifest(rows.assign(split=rows["role"].map(ROLE_SPLIT)))
+    both = set(rows.loc[rows.role == "pool", "path"]) & set(rows.loc[rows.role == "external", "path"])
+    if both:
+        raise ValueError(f"source leakage: {len(both)} file(s) in both the pool and the external set: "
+                         f"{sorted(both)[:5]}")
 
 
 # ------------------------------------------------------------- normalise ---
@@ -351,6 +373,7 @@ def main() -> None:
 
     rows = load_rows(Path(args.manifest), Path(args.ffpp_manifest),
                      tuple(Path(m) for m in args.extra_manifest))
+    check_roles(rows)  # every later set is a subset of these rows
     pool_rows = rows[rows.role == "pool"]
     pool_ai = pool_rows[pool_rows.label == "ai"]
     pool_real = pool_rows[pool_rows.label == "real"]
@@ -422,6 +445,7 @@ def main() -> None:
             f"{src} ({n} clips)" for src, n in pool.source.value_counts().sort_index().items()),
         "selection": "macro leave-one-generator-out AUC on the pool",
         "created": time.strftime("%Y-%m-%d %H:%M"),
+        "sklearn_version": sklearn.__version__,  # checked on load (trubeat.bundles, docs/13 D-05)
     }
     Path(args.model_out).parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(bundle, args.model_out)
@@ -495,6 +519,7 @@ def robustness_only(args, cfg: dict, workers: int) -> None:
     """Re-run only the robustness rows from saved features and the saved
     bundle (no retraining), into their own report."""
     data = pd.read_pickle(args.features)
+    check_roles(data)
     bundle = joblib.load(args.model_out)
     cols, thr = bundle["feature_columns"], float(bundle["threshold"])
     ext = data[data.role == "external"].reset_index(drop=True)

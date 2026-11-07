@@ -34,8 +34,9 @@ MIN_WILD_GAIN, MAX_TIER_DROP, MAX_LOGO_DROP = 0.05, 0.03, 0.01
 
 
 def evaluate(bundle_path: str, features_path: str) -> dict:
-    b = joblib.load(bundle_path)
     d = pd.read_pickle(features_path)
+    ta.check_roles(d)  # AGENTS.md §6: no group or file in both pool and external (docs/13 B-03)
+    b = joblib.load(bundle_path)
     cols, thr, C = b["feature_columns"], float(b["threshold"]), float(b["model"][-1].C)
     ext = d[d.role == "external"].reset_index(drop=True)
     s = ta.ai_score(b["model"], ext[cols].to_numpy())

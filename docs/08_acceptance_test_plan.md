@@ -38,10 +38,12 @@ fakes (final exam, evaluated once).
 
 ## 3. Regression (runs on every change)
 
-A fixed **golden set**: 5 videos (2 real UBFC, 1 real FF++, 2 fake FF++) with
-recorded expected outputs. `pytest tests/test_golden.py` fails the build if any
-number drifts beyond tolerance. Re-record the golden outputs deliberately, never
-by accident.
+CI (`.github/workflows/ci.yml`) runs the whole test suite on every push: the
+synthetic-signal property tests, the shipped model bundles loaded and scored
+(`tests/test_bundles.py`), and, in its full job, the real backbones, ffmpeg and
+the extension harness, where any skip fails the run. The golden set planned
+here (5 videos with recorded outputs) was never recorded; it was dropped in the
+2026-11-07 audit (docs/13 D-13).
 
 ## 4. System-level checks (Phase 4)
 
