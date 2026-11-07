@@ -191,11 +191,21 @@ def fetch_zip_members(url: str, members: list[str], dest: Path, threads: int = 6
     return len(todo) - len(failed), failed
 
 
-def zip_index(url: str) -> list[str]:
+def zip_index(url: str, attempts: int = 6) -> list[str]:
+    """Member names of a remote zip (its central directory only). Google Drive
+    answers 503 when reads come fast, so retry with growing pauses."""
     from remotezip import RemoteZip
 
-    with RemoteZip(url) as z:
-        return [i.filename for i in z.infolist()]
+    for attempt in range(attempts):
+        try:
+            with RemoteZip(url) as z:
+                return [i.filename for i in z.infolist()]
+        except Exception as exc:  # retried, then raised
+            if attempt == attempts - 1:
+                raise
+            log(f"  zip listing failed ({type(exc).__name__}: {str(exc)[:120]}); retry {attempt + 1}")
+            time.sleep(5 * 2 ** attempt)
+    return []
 
 
 def mp4s(names: list[str]) -> list[str]:
