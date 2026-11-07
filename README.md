@@ -49,18 +49,20 @@ uv pip install -e ".[serving]"      # gradio (optional extra)
 # or pip pulls ~3 GB of CUDA wheels):
 uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 uv pip install -e ".[aigen]"
-trubeat fetch-models                # one-time weight download: the ONLY network step
+trubeat fetch-models                # one-time weight download (~85 MB DINOv2-S + ~570 MB CLIP
+                                    # for the face-swap detector): the ONLY network step
 trubeat serve                       # http://127.0.0.1:7860
 ```
 
-Upload a video (**2–120 s**). Each clip goes through three independent
-checks, and the verdict says which one decided (docs/11 §4):
+Upload a video (**2–120 s**). Each clip goes through independent checks,
+and the verdict says which one decided (docs/11 §4, docs/12):
 
 | check | what it looks at | needs |
 |-------|------------------|-------|
 | **Content Credentials** | a C2PA manifest declaring AI generation (offline read; re-encoding usually strips it) | — |
 | **AI-video detector** | the whole frame over time: frozen DINOv2 features, how the clip moves through them (`src/trubeat/aigen.py`) | ≥ 2 s |
-| **face-swap check** | rPPG consistency across face regions, at a strict threshold (weak: about a quarter of Deepfakes-style swaps, ~2% of real face videos flagged) | ≥ 10 s, visible face |
+| **face-swap detector** (evidence only) | face crops from 16 frames, frozen CLIP ViT-B/16 features, a linear classifier trained on FaceForensics++ (`src/trubeat/faceswap.py`). Its score is shown but **never decides**: it flagged 38% of real faces from other sources (docs/12 §9) | ≥ 2 s, visible face |
+| **pulse face-swap check** | rPPG consistency across face regions, at a strict threshold (weak: about a quarter of Deepfakes-style swaps, ~2% of real face videos flagged) | ≥ 10 s, visible face |
 
 | verdict | meaning |
 |---------|---------|
@@ -172,12 +174,29 @@ tab capture and resolution changes barely move it (docs/11 §9.5). It does
 not detect face-swaps. The round-2 audit and the next steps are in
 `docs/11` §9.
 
+**2026-11-07 (docs/12): a face-swap detector, shown as evidence only.** A
+face-crop detector (frozen CLIP ViT-B/16 + logistic regression, chosen by
+leave-one-manipulation-out AUC) was trained in Colab on FaceForensics++ c23
+train + val. On the held-out FaceForensics++ test set its AUC is 0.97
+(Deepfakes), 0.95 (FaceSwap) and 0.93 (FaceShifter) with 1/140 real clips
+flagged; on DeepFakeDetection, AUC 0.88 with 3/150 reals flagged. But on
+real non-FaceForensics clips with a face (GenBuster-Bench + AIGVDBench) it
+flagged **115/300 = 38%** [33, 44], against a 3% limit fixed before the run,
+so by that rule it ships as evidence only and never decides. Re-compression
+alone sets it off: after a WhatsApp-like re-encode (640 px, CRF 30) it
+flags 45/140 real FaceForensics++ test clips, against 1/140 before. It does
+not flag the RepresentUs face-swap ad that started this round. The model is
+trained on FaceForensics++, whose terms allow non-commercial research use
+only; that applies to `src/trubeat/models/faceswap.joblib`.
+
 Human gates (env, dataset forms/downloads, ROI glance, gate reviews) are
 collected in `reports/HUMAN_GATES.md`.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE). The face-swap model
+`src/trubeat/models/faceswap.joblib` is trained on FaceForensics++, whose
+terms allow non-commercial research use only (docs/12 §4).
 
 ## Contact
 

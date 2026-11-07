@@ -658,3 +658,10 @@ and v2 docs `85af3d4`, website workflow note `ec05412`, missing-extra error
 
 P2 (multi-segment scoring) ran end to end on 2026-11-06 and was not
 adopted (§9.8); `scripts/eval_multiseg.py` is committed with its result.
+
+Round 3 (2026-11-06/07) is planned and reported in
+[docs/12](12_faceswap_detector_plan.md): the title-card guard for the
+AI-video detector (adopted, §6), and a face-crop face-swap detector trained
+on FaceForensics++ in Colab. It passed the in-dataset and cross-dataset
+gates but flagged 38% of real faces from other sources, so it ships as
+evidence only and the pulse check keeps its decisive role (docs/12 §9).

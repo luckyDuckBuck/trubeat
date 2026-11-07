@@ -8,6 +8,11 @@ conduct a review, then push"*, and *"if it's for training I'd prefer doing
 plan"*. The decision rules in §6 are fixed by this commit, before any
 face-swap result exists.
 
+**Result (2026-11-07, §9):** gates 1–3 passed, gate 4 failed (38% of real
+non-FaceForensics faces flagged; a WhatsApp-like re-encode alone makes it
+flag 32% of real FaceForensics++ test clips), so the detector ships as
+**evidence only**: its score is shown, it never decides.
+
 ---
 
 ## 1. Why
@@ -219,3 +224,81 @@ Commits follow AGENTS.md §8 and carry no AI attribution (the user's rule,
   tries all three official mirrors.
 - **Size of evidence:** 140 test reals bound a false-alarm rate only to
   about ±3 points; gate 4 adds ≥ 200 non-FaceForensics reals for that reason.
+
+## 9. Result (2026-11-07): shipped as evidence only
+
+**Run.** Colab, free T4, branch `round3-faceswap`, 6,450 videos:
+FaceForensics++ c23 with all six sets (5,160 train + val, 840 test) and
+DeepFakeDetection (150 real, 300 fake), 0 extraction errors. The first two
+attempts failed on the environment, not the method (Colab's inline plot
+backend broke MediaPipe, `ad134ae`; the CLIP weights' file name,
+`2d0351c`). The free session ended during the WhatsApp re-encode step,
+after everything below had been saved to Drive. Leakage check on the
+returned manifest: passed. Reports: `reports/faceswap_report.md` (Colab
+report plus the laptop runs below) and `reports/faceswap_gate4.md`.
+
+**Selection** (leave-one-manipulation-out macro AUC, train + val only):
+CLIP ViT-B/16 (OpenAI) CLS, C = 0.01: **0.838**; best DINOv2-B/14 0.759;
+best DINOv2-S/14 0.697. Threshold +1.577 (out-of-fold reals at 3%).
+Stage 1 passed gate 1, so stage 2 (the CNN) was not trained.
+
+| gate | measured (95% CI) | pass |
+|---|---|---|
+| 1. FaceForensics++ test AUC ≥ 0.85 per swap set | Deepfakes 0.967 [0.947, 0.984], FaceSwap 0.952 [0.923, 0.973], FaceShifter 0.928 [0.898, 0.954] | yes |
+| 2. FaceForensics++ test reals flagged ≤ 5/140 | 1/140 = 0.7% [0.1, 3.9] | yes |
+| 3. DeepFakeDetection AUC ≥ 0.70, reals flagged ≤ 8% | AUC 0.878 [0.831, 0.924]; 3/150 = 2.0% [0.7, 5.7] | yes |
+| 4. real non-FaceForensics clips with a face flagged ≤ 3% (n ≥ 200) | **115/300 = 38.3% [33.0, 43.9]**: GenBuster-Bench 106/158, AIGVDBench 9/142 | **no** |
+
+**Outcome (§6, applied by `train_faceswap.py ship`): evidence only.** The
+app shows the detector's score, its threshold and the 38% false-alarm rate
+measured in gate 4, and the detector never decides a verdict. The pulse
+check keeps its decisive role, as before this round.
+
+Caught at the threshold on the FaceForensics++ test set (140 per set):
+Deepfakes 79%, FaceSwap 69%, Face2Face 54% (AUC 0.922), FaceShifter 52%,
+NeuralTextures 27% (AUC 0.850). DeepFakeDetection: 77/300 = 25.7%, but
+161 of its 300 fakes and 83 of its 150 reals had a face in fewer than 4 of
+16 frames, so the check did not run on them.
+
+**What gate 4 shows.** Every GenBuster-Bench real clip is a 5 s,
+1024×1024 HEVC stock-style video; their median score is +2.19, above the
+threshold. The AIGVDBench reals (1920×1080 H.264 cuts of YouTube videos)
+are flagged at 6.3%. So the detector partly learned something that
+FaceForensics++ fakes share with ordinary processed real video. The
+re-encode test below points at processing: re-compressing the same real
+test clips alone raises their false alarms from 1/140 to 45/140. Gate 3
+missed this because DeepFakeDetection is distributed with FaceForensics++
+and compressed the same way (c23). Gate 4 was added for this risk (§8,
+last point), and it did its job.
+
+**Face finding.** The face finder found a face in at least 4 of 16 frames
+in 300 of the 706 gate-4 clips scored (many stock clips show no person) and
+in fewer than half of the DeepFakeDetection clips, which all show actors,
+often in wide shots. A likely cause, not verified: the Face Landmarker's
+short-range face detector misses small faces.
+
+**The RepresentUs clip** (report only, never tuned on): score −0.55,
+threshold +1.58, face in 13 of 16 frames: **not flagged**, as §8 warned.
+
+**On this laptop** (the FaceForensics++ test clips already on disk: 140
+reals, 31 Deepfakes, 31 Face2Face, 28 FaceSwap, 29 NeuralTextures, no
+FaceShifter; the Colab re-encode step was cut off by the session limit, so
+it ran here instead; `reports/faceswap_report.md`, last two sections):
+
+| same clips | reals flagged | AUC Deepfakes | FaceSwap | Face2Face | NeuralTextures |
+|---|---|---|---|---|---|
+| as downloaded | 1/140 = 0.7% [0.1, 3.9] | 0.940 | 0.950 | 0.893 | 0.844 |
+| WhatsApp-like re-encode (640 px wide, CRF 30) | **45/140 = 32.1% [25.0, 40.3]** | 0.899 | 0.859 | 0.736 | 0.568 |
+
+As downloaded, the laptop reproduces Colab exactly on the reals (1/140
+flagged, the same 6 without enough faces), so gate 4 is not a laptop
+artefact. After the re-encode, scores rise across the board: the catch
+rates go up (Deepfakes 68% → 81%) only because real clips are flagged
+too. A re-shared clip, such as a WhatsApp forward, is exactly the case
+this round started from; on such clips the detector's flag means little.
+
+**Next steps** (not started; each needs a new plan with its rule fixed
+first): train on real faces from more sources than FaceForensics++, with
+resampling and re-compression augmentation, and test on a real set the
+training never saw; a face detector that finds small faces; Celeb-DF v2 as
+a second cross-dataset test (human gate: access form).
