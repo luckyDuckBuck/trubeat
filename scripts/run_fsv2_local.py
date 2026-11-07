@@ -125,8 +125,9 @@ def step_env() -> None:
 
 def step_ffpp() -> None:
     need_gb(30, "FF++ c23 + c40 and DFD")
+    # the TUM server gives each connection ~0.6 MB/s from here: 8 at a time
     run([sys.executable, TF2, "fetch", "--root", DATA, "--datasets", "ffpp", "--compression", "c23", "c40",
-         "--threads", "4"])
+         "--threads", "8"])
     man = OUT / "manifests" / "ffpp.csv"
     t.finish_manifest(t.manifest_ffpp(DATA / "ffpp"), man)
     extract(man, stage2=True)
