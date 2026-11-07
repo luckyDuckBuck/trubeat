@@ -122,11 +122,23 @@ def sample_frames(path: str | Path, n: int, max_seconds: float) -> SampledFrames
             raise UnreadableVideo(f"cannot open video: {path}")
         fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
         n_total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-        if n_total <= 0:  # container without a frame count (e.g. a recorded WebM): count
-            # first, but only as far as sampling can reach, so a long file is not decoded in full
-            limit = int(max_seconds * (fps if fps > 0 else 60.0)) + 1
-            while n_total < limit and cap.grab():
+        if n_total <= 0:
+            # No frame count: a MediaRecorder WebM (the browser extension's
+            # capture) reports -2**63 frames at "1000 fps". Count from zero,
+            # only as far as sampling can reach (by timestamp, so a long file
+            # is not decoded in full), and take the frame rate from the
+            # timestamps the way the pulse ingest does.
+            from .ingest import _choose_fps
+
+            n_total, first_ms, last_ms = 0, None, None
+            while cap.grab():
+                t_ms = float(cap.get(cv2.CAP_PROP_POS_MSEC))
+                first_ms = t_ms if first_ms is None else first_ms
+                last_ms = t_ms
                 n_total += 1
+                if t_ms - first_ms > max_seconds * 1000.0:
+                    break
+            fps = _choose_fps(fps, n_total, first_ms, last_ms) if n_total else fps
             cap.release()
             cap = cv2.VideoCapture(str(p))
             if not cap.isOpened():

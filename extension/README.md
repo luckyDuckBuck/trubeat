@@ -27,6 +27,12 @@ and one set of thresholds.
    the backend's face-swap detector row (score, threshold, faces found;
    "evidence only" while the detector does not decide, docs/12 §9).
 
+**Tip: make the video fill the tab first** (fullscreen, or theater mode on
+YouTube). The extension records the whole tab, up to 1280 px wide; with
+the page around it a face can end up under ~40 px, and then neither face
+check finds it ("a face was found in 0 of 16 sampled frames"). The
+AI-video check looks at the whole frame and is unaffected.
+
 **Verdicts are exactly three states** (same wording as the web app and the
 website):
 

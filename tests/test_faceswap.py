@@ -274,6 +274,42 @@ def test_cnn_weights_are_never_paired_with_a_bundle_without_a_hash(tmp_path, mon
     assert fs.cnn_weights_path(bundle) is None
 
 
+def test_sample_frames_reads_a_browser_capture_without_a_frame_count(tmp_path, monkeypatch):
+    # 2026-11-07, the extension's MediaRecorder WebM: OpenCV reports -2**63 frames at
+    # "1000 fps". Counting must start at zero and the frame rate come from timestamps.
+    import cv2
+
+    class FakeCapture:  # 90 frames, 30 fps by timestamp
+        def __init__(self, path):
+            self.i = -1
+
+        def isOpened(self):
+            return True
+
+        def get(self, prop):
+            return {cv2.CAP_PROP_FPS: 1000.0, cv2.CAP_PROP_FRAME_COUNT: -9.223372036854776e18,
+                    cv2.CAP_PROP_POS_MSEC: self.i * 1000.0 / 30.0}.get(prop, 0.0)
+
+        def grab(self):
+            if self.i + 1 >= 90:
+                return False
+            self.i += 1
+            return True
+
+        def retrieve(self):
+            return True, np.full((48, 64, 3), self.i, np.uint8)
+
+        def release(self):
+            pass
+
+    p = tmp_path / "capture.webm"
+    p.write_bytes(b"stub")
+    monkeypatch.setattr(cv2, "VideoCapture", FakeCapture)
+    s = fs.sample_frames(p, 16, 120.0)
+    assert s.n_frames == 90 and len(s.frames) == 16 and s.index[-1] == 89
+    assert abs(s.fps - 30.0) < 0.5 and abs(s.duration_s - 3.0) < 0.1
+
+
 def test_clips_under_two_seconds_are_not_judged(tmp_path):
     p = synth.write_pulse_video(tmp_path / "v.mp4", fps=30.0, duration_s=1.0)
     r = fs.analyze(p, _bundle(), embedder=_StubEmbedder(+1.0), finder=_StubFinder(found=30))
