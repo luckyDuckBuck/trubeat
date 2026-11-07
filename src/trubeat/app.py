@@ -22,12 +22,13 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
 
-from . import face, features, hr, ingest, roi, signal
+from . import claims, face, features, hr, ingest, roi, signal
 from .errors import TrueBeatError
 
 # Where the trained G2 detector is looked up (see scripts/train_g2.py).
@@ -47,6 +48,9 @@ DEFAULT_MODEL_PATH = None
 
 # Always-visible honesty caveat: the measured operating envelope of each
 # layer (reports/aigen_detector_v2.md, reports/g2_detector.md, docs/11).
+# The app renders it from the claims of the models it loads (claims.caveat,
+# docs/13 A-07); this constant is that rendering for the packaged models,
+# kept as the fallback text and checked against claims.caveat by a test.
 # Numbers: reports/aigen_detector_v2.md (2026-11-01 retrain adopted under
 # docs/11 §9.7; external GenBuster-Bench and FF++ c23 test clips, never used
 # for training, selection or the threshold).
@@ -158,6 +162,27 @@ class VerdictThresholds:
 DEFAULT_THRESHOLDS = VerdictThresholds()
 
 
+@lru_cache(maxsize=1)
+def packaged_claims() -> dict:
+    """Claims of the packaged models: what verdict_for quotes for an analysis
+    built by hand (tests, callers of verdict_for) rather than by analyze_video."""
+    from . import aigen, faceswap
+
+    def one(path: Path, load) -> dict | None:
+        try:
+            b = load(path) if path.is_file() else None
+        except Exception:  # noqa: BLE001 — no packaged model: nothing to quote
+            return None
+        if b is not None:
+            b.setdefault("_path", str(path))
+        return claims.claims_for(b)
+
+    models = Path(__file__).parent / "models"
+    return {"ai_video": one(models / "aigen.joblib", aigen.load_bundle),
+            "face_swap": one(models / "faceswap.joblib", faceswap.load_bundle),
+            "pulse": one(models / "detector.joblib", lambda q: __import__("joblib").load(q))}
+
+
 @dataclass
 class PulseAnalysis:
     """Everything the verdict and the UI need, from one video.
@@ -207,6 +232,10 @@ class PulseAnalysis:
     fsd_top_frame: np.ndarray | None = field(default=None, repr=False, compare=False)
     fsd_top_box: tuple[int, int, int, int] | None = None  # x0, y0, side, side in that frame
     warnings: list[str] = field(default_factory=list)
+    # The measured numbers each layer's model carries (claims.claims_for; docs/13
+    # A-07) and the caveat rendered from them; empty -> the packaged models'.
+    claims: dict = field(default_factory=dict, repr=False, compare=False)
+    caveat: str = ""
     roi_waveforms: list[list[float]] = field(default_factory=list)  # 3 x T
     waveform_names: list[str] = field(default_factory=list)
     # The band the plotted waveforms were filtered to (Hz); the plot title
@@ -225,31 +254,49 @@ def _roi_names(config: dict) -> list[str]:
     return [str(n) for n in names]
 
 
+def _pick_bundle(explicit, candidates, load, what: str):
+    """The first loadable bundle: ``explicit`` if given, else the search paths
+    in order (repo overrides first, the packaged copy last). A bundle found by
+    search that would override the packaged one without measured numbers
+    (claims) is refused, so no text can quote numbers that belong to another
+    model (docs/13 A-07). ``load(path)`` returns the bundle or raises."""
+    cands = [Path(explicit)] if explicit else list(candidates)
+    packaged = Path(__file__).parent / "models"
+    for path in cands:
+        if not path.is_file():
+            continue
+        try:
+            bundle = load(path)
+        except Exception as exc:  # noqa: BLE001 — a broken bundle must not break the app
+            print(f"warning: could not load {what} {path}: {exc}")
+            continue
+        if bundle is None:
+            continue
+        bundle.setdefault("_path", str(path))
+        overriding = explicit is None and path.resolve().parent != packaged.resolve()
+        if overriding and claims.claims_for(bundle) is None:
+            print(f"warning: {what} {path} records no measured numbers (claims); using the packaged "
+                  "model instead (docs/13 A-07)")
+            continue
+        return bundle
+    return None
+
+
 def load_detector(model_path: Path | str | None = DEFAULT_MODEL_PATH):
     """Load the trained G2 detector bundle, or None if it is not available.
 
     The app degrades gracefully: without a detector it still measures the
     pulse (heart rate, inter-region agreement, QC) and says so.
     """
-    if model_path is not None:
-        candidates = [Path(model_path)]
-    else:
-        candidates = list(MODEL_SEARCH_PATHS)
-    for path in candidates:
-        if not path.is_file():
-            continue
-        try:
-            import joblib
+    def load(path: Path) -> dict:
+        import joblib
 
-            bundle = joblib.load(path)
-        except Exception as exc:  # noqa: BLE001 — a broken bundle must not break the app
-            print(f"warning: could not load detector {path}: {exc}")
-            continue
+        bundle = joblib.load(path)
         if isinstance(bundle, dict) and "model" in bundle:
-            bundle.setdefault("_path", str(path))
             return bundle
-        return {"model": bundle, "config": {}, "threshold": 0.0, "_path": str(path)}
-    return None
+        return {"model": bundle, "config": {}, "threshold": 0.0}
+
+    return _pick_bundle(model_path, MODEL_SEARCH_PATHS, load, "pulse detector")
 
 
 # One loaded AI-video bundle + backbone per process: loading DINOv2 takes
@@ -264,7 +311,7 @@ def load_aigen(path: Path | str | None = None):
     key = str(path) if path else "<search>"
     if key not in _AIGEN_CACHE:
         try:
-            bundle = aigen.find_bundle(path)
+            bundle = _pick_bundle(path, aigen.BUNDLE_SEARCH_PATHS, aigen.load_bundle, "AI-video bundle")
             emb = aigen.Embedder(bundle["config"]) if bundle else None
         except Exception as exc:  # noqa: BLE001 — a broken bundle must not break the app (docs/13 A-14)
             print(f"warning: could not load AI-video bundle: {exc}")
@@ -283,7 +330,7 @@ def load_faceswap(path: Path | str | None = None):
     key = str(path) if path else "<search>"
     if key not in _FS_CACHE:
         try:
-            bundle = faceswap.load_bundle(path)
+            bundle = _pick_bundle(path, faceswap.BUNDLE_SEARCH_PATHS, faceswap.load_bundle, "face-swap bundle")
             cfg = faceswap.merged_config(bundle["config"]) if bundle is not None else None
         except Exception as exc:  # noqa: BLE001 — a broken bundle must not break the app
             print(f"warning: could not load face-swap bundle: {exc}")
@@ -337,9 +384,14 @@ def analyze_video(
     part of the frame (the browser extension's video element, docs/13 §3.4).
     """
     config = dict(config or {})
-    thr = thresholds or DEFAULT_THRESHOLDS
     path = Path(video_path)
     a = PulseAnalysis(verdict="inconclusive", headline="", detail="")
+    a.claims = model_claims(model_path, aigen_path, faceswap_path, layers)
+    a.caveat = claims.caveat(a.claims.get("ai_video"), a.claims.get("pulse"), a.claims.get("face_swap"),
+                             fsd_mode=a.claims.get("fsd_mode", "evidence"))
+    strict = (a.claims.get("pulse") or {}).get("strict_threshold")
+    thr = thresholds or (replace(DEFAULT_THRESHOLDS, faceswap_threshold=float(strict)) if strict is not None
+                         else DEFAULT_THRESHOLDS)
     if not path.is_file():
         a.warnings.append("E_UNREADABLE")
         a.layers["file"] = f"not a readable file: {path.name}"
@@ -358,6 +410,35 @@ def analyze_video(
         bar("decode", 0.0, "Pulse: decoding the video")
         _pulse_layer(a, path, config, model_path, thr, max_seconds, bar, region)
     return verdict_for(a, thr)
+
+
+def model_claims(model_path=DEFAULT_MODEL_PATH, aigen_path=None, faceswap_path=None,
+                 layers: tuple[str, ...] = ("ai_video", "face_swap", "pulse")) -> dict:
+    """The claims of the models analyze_video will use, per layer, plus the
+    face-swap bundle's mode under ``fsd_mode`` (docs/13 A-07); reading them
+    loads only the small bundle files, not the backbones."""
+    from . import aigen, faceswap
+
+    out: dict = {"fsd_mode": "evidence"}
+    if "ai_video" in layers:
+        out["ai_video"] = claims.claims_for(_pick_bundle(aigen_path, aigen.BUNDLE_SEARCH_PATHS, aigen.load_bundle,
+                                                         "AI-video bundle"))
+    if "face_swap" in layers:
+        fs_bundle = _pick_bundle(faceswap_path, faceswap.BUNDLE_SEARCH_PATHS, faceswap.load_bundle,
+                                 "face-swap bundle")
+        out["face_swap"] = claims.claims_for(fs_bundle)
+        if fs_bundle is not None:
+            out["fsd_mode"] = str(fs_bundle.get("mode", "evidence"))
+    if "pulse" in layers:
+        out["pulse"] = claims.claims_for(load_detector(model_path))
+    return out
+
+
+def current_caveat() -> str:
+    """The caveat for the models a default analysis would load (bundle files
+    only; no backbone is loaded)."""
+    c = model_claims()
+    return claims.caveat(c.get("ai_video"), c.get("pulse"), c.get("face_swap"), fsd_mode=c["fsd_mode"])
 
 
 def _provenance_layer(a: PulseAnalysis, path: Path) -> None:
@@ -659,6 +740,8 @@ def verdict_for(analysis: PulseAnalysis, thresholds: VerdictThresholds | None = 
     thr = thresholds or DEFAULT_THRESHOLDS
     a = analysis
     prov = a.provenance or {}
+    cl = a.claims or packaged_claims()
+    ai_cl, pulse_cl = cl.get("ai_video"), cl.get("pulse")
 
     # Content Credentials decide only when their signature checks out
     # (docs/13 A-19): an unsigned or broken manifest declaring AI generation
@@ -684,8 +767,9 @@ def verdict_for(analysis: PulseAnalysis, thresholds: VerdictThresholds | None = 
         a.headline = "Likely AI-generated"
         a.detail = (
             f"The whole-frame detector scores this clip {a.ai_score:+.2f}, above its "
-            f"threshold of {a.ai_threshold:+.2f} (set so that about 5% of real clips "
-            "cross it)."
+            f"threshold of {a.ai_threshold:+.2f}"
+            + (f" (set so that {claims.about(float(ai_cl['target_fpr']))} of real clips cross it)."
+               if ai_cl and ai_cl.get("target_fpr") is not None else ".")
         )
         if a.ai_real_percentile is not None:
             a.detail += (
@@ -722,8 +806,9 @@ def verdict_for(analysis: PulseAnalysis, thresholds: VerdictThresholds | None = 
         a.detail = (
             f"The face-region consistency score ({a.detector_score:+.2f}) is at or "
             f"below the strict face-swap threshold ({thr.faceswap_threshold:+.2f}). "
-            "This check is weak: it catches about a quarter of Deepfakes-style "
-            "swaps and flags about 2% of real face videos."
+            + (f"This check is weak: it catches {claims.about(float(pulse_cl['recall']['Deepfakes']))} of "
+               f"Deepfakes-style swaps and flags {claims.about(float(pulse_cl['real_fpr']['rate']))} of real "
+               "face videos." if pulse_cl else "This check is weak; its model records no measured accuracy.")
         )
         if a.fsd_available:  # evidence only here (fsd_decides is False on this path)
             a.detail += (f" The face-swap detector (evidence only) "
@@ -948,7 +1033,7 @@ def api_payload(a: PulseAnalysis) -> dict:
             "degraded": a.degraded,
             "warnings": a.warnings,
         },
-        "caveat": CAVEAT,
+        "caveat": a.caveat or CAVEAT,
     }
 
 
@@ -1049,7 +1134,7 @@ def build_demo(
                                     interactive=False, visible=False)
                 seek = gr.Number(visible=False, elem_id="tb-seek")
         plot = gr.Plot(label="Per-region pulse waveforms", elem_id="tb-plot")
-        gr.Markdown(f"**Caveat: always applies:** {CAVEAT}", elem_id="tb-caveat")
+        gr.Markdown(f"**Caveat: always applies:** {current_caveat()}", elem_id="tb-caveat")
         # One loader, one place: the Plot panel is the output the user
         # watches. Without this Gradio renders the progress overlay on every
         # output (a duplicate sat over the caveat). Outputs stay unchanged.

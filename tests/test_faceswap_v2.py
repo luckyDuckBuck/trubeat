@@ -124,3 +124,34 @@ def test_dedupe_removes_only_df40_training_clips_that_nearly_duplicate_a_held_ou
     assert dropped == {"df40__simswap__train__001_002"}
     assert removed[0]["nearest"] == "ffpp__original__900" and removed[0]["cosine"] > 0.97
     assert summary["candidates"] == 2 and summary["references"] == 2 and summary["removed"] == 1
+
+
+def test_ship_writes_the_claims_the_app_quotes(tmp_path):
+    import argparse
+    import hashlib
+    import json
+
+    import joblib
+
+    from trubeat import claims
+
+    bundle = {"model": None, "config": {}, "threshold": 1.0, "gates": _g(g1=True, g2=True, g2b=True, g3=False),
+              "trained_on": {("ffpp", "original"): 10, ("df40", "df40:simswap"): 5}}
+    src = tmp_path / "faceswap_v2.joblib"
+    joblib.dump(bundle, src)
+    sha = hashlib.sha256(src.read_bytes()).hexdigest()
+    g4 = tmp_path / "g4.json"
+    g4.write_text(json.dumps({"bundle_sha256": sha, "frozen_manifest": "faceswap_gate4a.csv", "k": 4, "n": 250,
+                              "rate": 0.016, "ci": [0.006, 0.04], "passed": True}))
+    r3 = tmp_path / "r3.json"
+    r3.write_text(json.dumps({"rate": 0.383, "ci": [0.33, 0.439]}))
+    out = tmp_path / "shipped.joblib"
+    t.cmd_ship(argparse.Namespace(bundle=str(src), gate4a=str(g4), round3_gate4=str(r3), out=str(out),
+                                  decision=str(tmp_path / "decision.json")))
+    b = joblib.load(out)
+    assert b["mode"] == "evidence"                                    # gate 3 failed, 4a far below round 3
+    c = claims.claims_for(b)
+    assert c["trained_on"] == "FaceForensics++ and DF40"
+    assert c["outside_fpr"]["k"] == 4 and c["outside_fpr"]["n"] == 250
+    text = claims.caveat(None, None, c, fsd_mode=b["mode"])
+    assert "trained on FaceForensics++ and DF40 is shown as evidence only" in text and "2% of real faces" in text

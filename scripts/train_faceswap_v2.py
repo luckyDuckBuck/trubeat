@@ -1439,6 +1439,17 @@ def cmd_ship(a) -> None:
         ("4a. frozen round-3 gate-4 list flagged <= 3% of judged, n >= 200, no source > 6%", bool(g4["passed"]),
          f"{g4['k']}/{g4['n']} judged flagged")]
     b.update(mode=outcome, gate4=g4, shipped=time.strftime("%Y-%m-%d %H:%M"), ship_reason=why)
+    # the numbers the app may quote about this bundle (trubeat.claims, docs/13 A-07)
+    datasets = {str(k[0]) for k in (b.get("trained_on") or {})}     # keys are (dataset, family)
+    names = {"ffpp": "FaceForensics++", "df40": "DF40"}
+    b["claims"] = {
+        "layer": "face_swap", "source": "docs/13 §10 and reports/faceswap_gate4a.md",
+        "trained_on": " and ".join(names.get(d, d) for d in sorted(datasets, key=lambda d: (d != "ffpp", d)))
+                      or "FaceForensics++",
+        "outside_fpr": {"k": int(g4["k"]), "n": int(g4["n"]), "rate": float(g4["rate"]),
+                        "set": "GenBuster-Bench + AIGVDBench reals, judged clips (frozen gate-4a list)"},
+        "target_fpr": float(fs.merged_config(b["config"])["target_fpr"]),
+    }
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(b, a.out)
     Path(a.decision).write_text(json.dumps({"outcome": outcome, "why": why, "out": a.out,
