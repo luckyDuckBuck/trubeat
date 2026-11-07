@@ -7,9 +7,10 @@
   <body>
     <!--
       Offscreen document: the only place a service worker cannot reach where
-      getUserMedia + MediaRecorder are available. It records the tab stream
-      and hands the resulting blob back to the service worker. It never
-      touches the network.
+      getUserMedia + MediaRecorder are available. It records the tab stream,
+      uploads the recording to the backend URL set in Options (a Blob cannot
+      cross a runtime message) and waits there for the verdict. That backend
+      is the only host it contacts; nothing is stored here.
     -->
     <script src="offscreen.js"></script>
   </body>

@@ -7,6 +7,11 @@
  * message, and a service worker would be idle-killed mid-stream). This
  * script uploads the clip, then runs the shipped ANALYZE handler and waits
  * for the posted outcome.
+ *
+ *   node tests/js/extension_print_result.mjs <backend> <clip> ['{"x0":..,"y0":..,"x1":..,"y1":..}']
+ *
+ * The optional region (in the clip's pixels) goes to /analyze_video_region
+ * exactly as the extension sends a video element's box (1.3.0).
  */
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -16,6 +21,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const EXT = join(HERE, "..", "..", "extension");
 const BACKEND = process.argv[2];
 const VIDEO = process.argv[3];
+const REGION = process.argv[4] ? JSON.parse(process.argv[4]) : null;
 const TAB_ID = 7;
 
 let listener = null;
@@ -60,7 +66,11 @@ if (!up.ok) throw new Error(`HTTP ${up.status} while uploading`);
 const serverPath = (await up.json())[0];
 
 // 2. analyse through the shipped handler and wait for the posted outcome
-listener({ type: "ANALYZE", tabId: TAB_ID, serverPath, backend: BACKEND }, null, () => {});
+listener(
+  { type: "ANALYZE", tabId: TAB_ID, serverPath, backend: BACKEND, region: REGION, capture: null, note: "" },
+  null,
+  () => {}
+);
 const horizon = Date.now() + 300000; // 60 s of clip is roughly 20 s of compute
 while (!posted && Date.now() < horizon) {
   await new Promise((r) => setTimeout(r, 100));
@@ -76,6 +86,8 @@ console.log(
   "EXTENSION:",
   JSON.stringify({
     verdict: res.verdict,
+    requested_region: REGION,
+    note: posted.note || "", // says so when the backend could not crop
     score: round(res.score),
     hr: Object.values(res.per_roi_hr).map((v) => round(v)),
     agree: round(res.region_agreement_bpm),

@@ -89,9 +89,11 @@ testBtn.addEventListener("click", async () => {
       backend,
     });
     if (res && res.reachable) {
-      status.textContent = res.hasAnalyze
-        ? "Backend reachable and ready (analyze_video found)."
-        : "Backend reachable, but it has no analyze_video endpoint.";
+      status.textContent = !res.hasAnalyze
+        ? "Backend reachable, but it has no analyze_video endpoint."
+        : res.hasRegion
+          ? "Backend reachable and ready (analyze_video_region found: it analyses just the video)."
+          : "Backend reachable and ready (analyze_video found; an older version that analyses the whole tab).";
       status.className = res.hasAnalyze ? "status ok" : "status err";
     } else {
       status.textContent =

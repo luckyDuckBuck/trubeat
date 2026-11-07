@@ -52,13 +52,16 @@
     <button id="check">Check this tab</button>
     <button class="ghost" id="options">Options</button>
     <div class="status" id="status"></div>
-    <div class="hint">
-      Records ~20 s of the tab's video and analyses it on your own backend.
-      Nothing is stored, nothing is sent anywhere but that backend.
+    <div class="hint" id="hint">
+      Records up to 20 s of the video playing in this tab and sends it only
+      to your backend, which analyses it and then deletes it. The extension
+      keeps nothing.
     </div>
     <div class="caveat" id="caveat">
-      Detects face-swaps. Reenactment fakes (Face2Face, NeuralTextures) keep
-      the original pulse and are out of scope.
+      Checks for AI-generated video (and reads Content Credentials) and,
+      weakly, for face-swaps. The panel on the page shows your backend's
+      verdict, its evidence and its caveat. 'No sign of AI generation' is
+      not proof a video is real.
     </div>
     <script src="popup.js"></script>
   </body>
