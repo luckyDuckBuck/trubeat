@@ -6,9 +6,9 @@ come from the local, gitignored runs/faceswap/round4_links.json and live only
 in the private kernel, never in the repo.
 
 Usage:
-    python scripts/kaggle_run.py push k1s0 k1s1 k1s2 k1b      (K1 is sharded: K1_SHARDS sessions)
-    python scripts/kaggle_run.py push k1s2 --slug trubeat-r4-k1s2c --resume-from trubeat-r4-k1s2   (a continuation)
-    python scripts/kaggle_run.py status k1s0 k1s1 k1s2 k1b
+    python scripts/kaggle_run.py push k1c0 k1c1 k1c2 k1c3 k1c4 k1b   (K1 is sharded: K1C_SHARDS sessions)
+    python scripts/kaggle_run.py push k1c2 --slug trubeat-r4-k1c2b --resume-from trubeat-r4-k1c2   (a continuation)
+    python scripts/kaggle_run.py status k1c0 k1c1 k1c2 k1c3 k1c4 k1b
     python scripts/kaggle_run.py wait k2 [--poll 300]
     python scripts/kaggle_run.py pull k2 --dest runs/fsv2/k2 [--pattern 'manifest|report|extract_log']
 """
@@ -27,13 +27,17 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 KDIR = REPO / "notebooks" / "kaggle"
 LINKS = REPO / "runs" / "faceswap" / "round4_links.json"
-K1_SHARDS = 3       # FF++ + DFD with six variants: ~13 s per video on the laptop -> ~16 h on one 4-vCPU session
+B16 = "vit_base_patch16_clip_224.openai"
+# FF++ + DFD in CPU sessions: Kaggle cancelled every GPU session that started downloading FF++
+# (3 times, 2026-11-07). ~93 vCPU-hours of work in total (six variants, faces, B/16 on CPU).
+K1C_SHARDS = 5
 KERNELS = {
-    **{f"k1s{i}": {"body": "k1_ffpp.py", "slug": f"trubeat-r4-k1s{i}", "gpu": True, "links": False, "sources": [],
-                   "shard": f"{i}/{K1_SHARDS}"} for i in range(K1_SHARDS)},
-    "k1b": {"body": "k1b_more.py", "slug": "trubeat-r4-k1b", "gpu": True, "links": True, "sources": []},
-    "k2": {"body": "k2_select.py", "slug": "trubeat-r4-k2", "gpu": False, "links": False,
-           "sources": [f"trubeat-r4-k1s{i}" for i in range(K1_SHARDS)] + ["trubeat-r4-k1b"]},
+    **{f"k1c{i}": {"body": "k1_ffpp.py", "slug": f"trubeat-r4-k1c{i}", "gpu": False, "links": False, "sources": [],
+                   "shard": f"{i}/{K1C_SHARDS}", "backbones": B16} for i in range(K1C_SHARDS)},
+    "k1b": {"body": "k1b_more.py", "slug": "trubeat-r4-k1b", "gpu": True, "links": True, "sources": [],
+            "backbones": B16},
+    "k2": {"body": "k2_select.py", "slug": "trubeat-r4-k2", "gpu": False, "links": False, "backbones": B16,
+           "sources": [f"trubeat-r4-k1c{i}" for i in range(K1C_SHARDS)] + ["trubeat-r4-k1b"]},
 }
 
 
@@ -59,6 +63,7 @@ def build(name: str, resume_from: list[str], slug: str | None) -> Path:
             raise SystemExit(f"{LINKS} is missing (the dataset links, kept out of the repo)")
         links = LINKS.read_text()
     common = (KDIR / "common.py").read_text().replace("__LINKS__", links).replace("__SHARD__", k.get("shard", ""))
+    common = common.replace("__GPU__", "1" if k["gpu"] else "0").replace("__BACKBONES__", k["backbones"])
     code = common + "\n\n" + (KDIR / k["body"]).read_text()
     user = username()
     d = Path(tempfile.mkdtemp(prefix=f"kaggle_{name}_"))

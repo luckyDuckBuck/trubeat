@@ -22,6 +22,8 @@ DATA = "/tmp/trubeat_data"
 SESSION_S = 11.0 * 3600          # Kaggle ends sessions at 12 h; stop with an hour to spare
 LINKS = json.loads(r'''__LINKS__''')
 SHARD = "__SHARD__"              # "I/N" for a K1 shard (scripts/kaggle_run.py), else empty
+GPU = "__GPU__" == "1"           # the session has GPUs
+BACKBONES = "__BACKBONES__"      # the backbones this kernel embeds with (space-separated timm names)
 os.environ["MPLBACKEND"] = "Agg"
 
 

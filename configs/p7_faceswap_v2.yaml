@@ -56,9 +56,18 @@ crop_aug:
 stage2_crop_size: 380
 stage2_datasets: [ffpp, dfd]
 
+# docs/13 §3.2 dedupe: a DF40 training clip whose mean v0 face embedding (CLS)
+# has cosine >= threshold with any held-out clip is removed before selection.
+# On face crops, unrelated clips peak near 0.93 and clips cut from one video
+# reach 0.97-0.99 (measured 2026-11-07 on 60 FF++ clips, 1,770 pairs).
+dedupe:
+  backbone: vit_base_patch16_clip_224.openai
+  threshold: 0.97
+
 # Selection (docs/13 §6.2, with the 2026-11-07 two-stage revision).
 candidates:
-  backbones: [vit_base_patch16_clip_224.openai, vit_large_patch14_clip_224.openai]
+  # L/14 dropped 2026-11-07 (docs/13 §6.6): FF++ runs in CPU-only sessions
+  backbones: [vit_base_patch16_clip_224.openai]
   features: [cls, cls+patch]
   C: [0.01, 0.1, 1.0]
   training_sets: [base, video, video+crop]   # base = v0 + c40; video = + v1-v4; video+crop = + crop augmentation

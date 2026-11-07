@@ -106,3 +106,21 @@ def test_dfd_groups_join_both_actors_over_the_whole_manifest():
     assert b.set_index("source_id").group["05__run"] == "dfd:02"   # shard-local answer
     both = t.regroup_dfd(pd.concat([a, b], ignore_index=True))
     assert both.set_index("source_id").group.to_dict() == g
+
+
+def test_dedupe_removes_only_df40_training_clips_that_nearly_duplicate_a_held_out_clip():
+    rng = np.random.default_rng(0)
+    base = rng.normal(size=(4, 32))
+    near = base[0] + 0.01 * rng.normal(size=32)          # a near-copy of held-out clip 0
+    rows = [
+        {"video_id": "ffpp__original__900", "dataset": "ffpp", "split": "test", "cls": base[0]},
+        {"video_id": "cdf2__Celeb-real__id1_0001", "dataset": "cdf2", "split": "external", "cls": base[1]},
+        {"video_id": "df40__simswap__train__001_002", "dataset": "df40", "split": "train", "cls": near},
+        {"video_id": "df40__simswap__train__003_004", "dataset": "df40", "split": "train", "cls": base[2]},
+        {"video_id": "ffpp__original__001", "dataset": "ffpp", "split": "train", "cls": near},   # not a DF40 clip
+    ]
+    st = pd.DataFrame(rows).assign(source="v0", judged=True)
+    dropped, removed, summary = t.dedupe(st, 0.97)
+    assert dropped == {"df40__simswap__train__001_002"}
+    assert removed[0]["nearest"] == "ffpp__original__900" and removed[0]["cosine"] > 0.97
+    assert summary["candidates"] == 2 and summary["references"] == 2 and summary["removed"] == 1

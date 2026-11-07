@@ -786,6 +786,43 @@ def load_store(df: pd.DataFrame, fdir: Path, backbone: str, min_faces: int, k_au
     return st
 
 
+def unit_rows(vectors) -> np.ndarray:
+    X = np.stack(list(vectors)).astype(np.float32)
+    return X / np.maximum(np.linalg.norm(X, axis=1, keepdims=True), 1e-12)
+
+
+def nearest(A: np.ndarray, B: np.ndarray, chunk: int = 4096) -> tuple[np.ndarray, np.ndarray]:
+    """For each unit row of A: the highest cosine with a unit row of B, and its index."""
+    best, arg = np.full(len(A), -np.inf, np.float32), np.zeros(len(A), int)
+    for i in range(0, len(B), chunk):
+        S = A @ B[i:i + chunk].T
+        j = S.argmax(axis=1)
+        v = S[np.arange(len(A)), j]
+        upd = v > best
+        best[upd], arg[upd] = v[upd], j[upd] + i
+    return best, arg
+
+
+def dedupe(st: pd.DataFrame, threshold: float) -> tuple[set[str], list[dict], dict]:
+    """docs/13 §3.2: DF40 training clips whose mean v0 face embedding (CLS) has
+    cosine >= ``threshold`` with any held-out clip in the features (FF++ test,
+    Celeb-DF, DF40 on Celeb-DF, DF40 test, DFD, UADFV). On face crops,
+    unrelated clips peak near 0.93 and clips cut from one video reach
+    0.97-0.99 (measured 2026-11-07), so 0.97 still means near-duplicate."""
+    v0 = st[(st.source == "v0") & st.judged]
+    cand = v0[(v0.dataset == "df40") & v0.split.isin(["train", "val"])]
+    ref = v0[~v0.split.isin(["train", "val"])]
+    summary: dict = {"candidates": len(cand), "references": len(ref), "threshold": threshold, "removed": 0}
+    if cand.empty or ref.empty:
+        return set(), [], summary
+    best, arg = nearest(unit_rows(cand.cls), unit_rows(ref.cls))
+    removed = [{"video_id": cand.video_id.iloc[k], "nearest": ref.video_id.iloc[arg[k]], "cosine": float(best[k])}
+               for k in np.flatnonzero(best >= threshold)]
+    summary.update(removed=len(removed), max_cosine_median=float(np.median(best)),
+                   max_cosine_p99=float(np.quantile(best, 0.99)), max_cosine_max=float(best.max()))
+    return {r["video_id"] for r in removed}, removed, summary
+
+
 def descriptors(st: pd.DataFrame, feature: str) -> np.ndarray:
     parts = [np.stack(st.cls.to_numpy())]
     if feature == "cls+patch":
@@ -1110,6 +1147,23 @@ def cmd_select(a) -> None:
                              "(docs/13 B-02; --allow-errors reports them as errors, never as 'no face')")
         stores[b] = st.reset_index(drop=True)
         log(f"{b}: {len(st)} (video, source) rows, {int(st.judged.sum())} judged, {n_err} errors")
+    # docs/13 §3.2 dedupe (+ the laptop's gate-4a overlap exclusions, --exclude) before any fit
+    dd = cfg["dedupe"]
+    db = dd["backbone"] if dd["backbone"] in stores else backbones[0]
+    dropped, removed, dd_summary = dedupe(stores[db], float(dd["threshold"]))
+    excluded = set()
+    if a.exclude:
+        excluded = {ln.strip() for ln in Path(a.exclude).read_text().splitlines() if ln.strip()}
+    for b in backbones:
+        stores[b] = stores[b][~stores[b].video_id.isin(dropped | excluded)].reset_index(drop=True)
+    dd_summary.update(backbone=db, excluded=sorted(excluded))
+    log(f"dedupe ({db}, cosine >= {dd['threshold']}): {len(dropped)} DF40 training clips removed of "
+        f"{dd_summary['candidates']}; {len(excluded)} excluded by --exclude")
+    ref = stores[db]
+    rm = ((ref.source == "v0") & ref.judged & (ref.dataset == "df40") & ref.split.isin(["train", "val"])).to_numpy()
+    if rm.any():  # for the laptop: gate-4a clips vs these (docs/13 §6.6 item 11)
+        np.savez(out / "dedupe_reference.npz", video_id=ref.video_id[rm].to_numpy().astype(str),
+                 cls=np.stack(ref.cls[rm].to_numpy()).astype(np.float16), backbone=np.array(db))
     # stage A: representation on the base set, repeated folds
     stage_a = []
     jobs = []
@@ -1205,7 +1259,7 @@ def cmd_select(a) -> None:
         "real_reference_scores": ref_scores, "training_set": tset, "C": C,
         "trained_on": tr.groupby(["dataset", "family"]).size().to_dict(),
         "stage_a": sa.to_dict("records"), "stage_b": sb.drop(columns=["cost"]).to_dict("records"),
-        "lopso_constraint_met": constraint_met,
+        "lopso_constraint_met": constraint_met, "dedupe": {**dd_summary, "removed_list": removed[:200]},
         "metrics": {k: (list(v) if isinstance(v, tuple) else v) for k, v in M.items()},
         "gates": g, "in_domain_oof_auc": in_domain, "created": time.strftime("%Y-%m-%d %H:%M"),
         "versions": versions(), "backbone_sha256": weights_sha(b), "round": 4,
@@ -1221,6 +1275,13 @@ def cmd_select(a) -> None:
           f"every held-out rate is over judged clips (a face in >= {min_faces} of {cfg['n_frames']} frames) and "
           "printed with the total; AUC intervals resample identity groups; rate intervals are Wilson. "
           f"Config hash `{fs.config_hash(icfg)}`; versions {json.dumps(bundle['versions'])}."), "",
+         (f"Dedupe (docs/13 §3.2): {dd_summary['removed']} of {dd_summary['candidates']} DF40 training clips "
+          f"removed (mean v0 face embedding, {db}, cosine >= {dd_summary['threshold']} with one of "
+          f"{dd_summary['references']} held-out clips); {len(excluded)} more excluded after the laptop's "
+          "gate-4a overlap check." + (f" Nearest-neighbour cosine of the DF40 clips: median "
+                                       f"{dd_summary['max_cosine_median']:.3f}, 99th percentile "
+                                       f"{dd_summary['max_cosine_p99']:.3f}, max {dd_summary['max_cosine_max']:.3f}."
+                                       if "max_cosine_max" in dd_summary else "")), "",
          "## Stage A: representation (LOMO macro AUC on the base set, repeated group folds)", "",
          md_table(sa), "",
          "## Stage B: training set (LOPSO false alarms at the 3% target; LOMO on the training set)", "",
@@ -1235,6 +1296,68 @@ def cmd_select(a) -> None:
     (out / "faceswap_v2_report.md").write_text("\n".join(L) + "\n")
     (out / "faceswap_v2_metrics.json").write_text(json.dumps(bundle["metrics"], indent=1, default=str))
     print("\n".join(L))
+
+
+# ------------------------------------------------------------------- overlap ---
+
+def _overlap_init(cfg: dict, backbone: str) -> None:
+    warnings.filterwarnings("ignore")
+    _W["cfg"] = cfg
+    _W["finder"] = fs.FaceFinder(inference_cfg(cfg))
+    _W["emb"] = fs.FaceEmbedder(backbone, "cls+patch", 2, img_size=int(cfg["crop_size"]))
+
+
+def _overlap_one(path: str) -> tuple[str, np.ndarray | None, str]:
+    """Mean v0 face embedding (CLS) of one clip, cut as `extract` cuts them."""
+    cfg = _W["cfg"]
+    try:
+        s = fs.sample_frames(path, int(cfg["n_frames"]), float(cfg["window_s"]))
+        crops = fs.face_crops(s, _W["finder"], inference_cfg(cfg))
+        if not crops:
+            return path, None, "no face"
+        emb = _W["emb"].embed(np.stack([c.crop for c in crops]))
+        return path, emb[:, : emb.shape[1] // 2].mean(axis=0), ""
+    except Exception as exc:  # noqa: BLE001 - reported per clip
+        return path, None, f"{type(exc).__name__}: {exc}"
+
+
+def cmd_overlap(a) -> None:
+    """docs/13 §3.2 dedupe against gate 4a, on the laptop (the gate-4a clips
+    never leave it): DF40 training clips (select's dedupe_reference.npz) at
+    cosine >= the dedupe threshold with any gate-4a clip are written to an
+    exclusion list for a selection rerun (docs/13 §6.6 item 11)."""
+    import check_faceswap_reals as cfr
+
+    cfg = load_cfg(a.config)
+    ref = np.load(a.reference, allow_pickle=False)
+    R, ids, backbone = unit_rows(ref["cls"].astype(np.float32)), ref["video_id"].astype(str), str(ref["backbone"])
+    thr = float(cfg["dedupe"]["threshold"])
+    paths, _ = cfr.frozen_list(a.manifest)
+    vecs, rows = [], []
+    with mp.get_context("spawn").Pool(a.workers, initializer=_overlap_init, initargs=(cfg, backbone)) as pool:
+        for k, (path, vec, err) in enumerate(pool.imap(_overlap_one, paths, chunksize=2), 1):
+            rows.append({"path": path, "error": err, "has_vector": vec is not None})
+            if vec is not None:
+                vecs.append(vec)
+            if k % 100 == 0:
+                log(f"  {k}/{len(paths)}")
+    G = unit_rows(vecs)
+    best_df40, arg_df40 = nearest(R, G)            # each DF40 training clip vs every gate-4a clip
+    best_gate, _ = nearest(G, R)
+    with_vec = [r["path"] for r in rows if r["has_vector"]]
+    hits = [{"video_id": ids[i], "gate4a_clip": Path(with_vec[arg_df40[i]]).name, "cosine": float(best_df40[i])}
+            for i in np.flatnonzero(best_df40 >= thr)]
+    Path(a.exclude_out).write_text("".join(f"{h['video_id']}\n" for h in hits))
+    rep = {"created": time.strftime("%Y-%m-%d %H:%M"), "backbone": backbone, "threshold": thr,
+           "df40_training_clips": len(ids), "gate4a_clips": len(paths), "gate4a_with_face": len(vecs),
+           "gate4a_errors": [r for r in rows if r["error"] and r["error"] != "no face"][:20],
+           "max_cosine_gate4a": {"median": float(np.median(best_gate)), "p99": float(np.quantile(best_gate, 0.99)),
+                                 "max": float(best_gate.max())},
+           "hits": hits}
+    Path(a.out).write_text(json.dumps(rep, indent=1))
+    log(f"overlap: {len(hits)} DF40 training clips at cosine >= {thr} with a gate-4a clip "
+        f"(gate-4a nearest cosine: median {rep['max_cosine_gate4a']['median']:.3f}, max "
+        f"{rep['max_cosine_gate4a']['max']:.3f}); exclusion list -> {a.exclude_out}")
 
 
 # ---------------------------------------------------------------------- ship ---
@@ -1340,7 +1463,15 @@ def main() -> None:
     s.add_argument("--backbones", nargs="*", default=None)
     s.add_argument("--config", default=None)
     s.add_argument("--allow-errors", action="store_true")
+    s.add_argument("--exclude", default=None, help="file of video ids to leave out (the laptop's overlap check)")
     s.add_argument("--smoke", action="store_true", help="tiny fold settings for a local pipeline check")
+    o = sub.add_parser("overlap", help="laptop: DF40 training clips vs the gate-4a clips (docs/13 §3.2 dedupe)")
+    o.add_argument("--reference", required=True, help="dedupe_reference.npz from select")
+    o.add_argument("--manifest", default=str(REPO / "data/manifests/faceswap_gate4a.csv"))
+    o.add_argument("--out", default=str(REPO / "reports/faceswap_v2_overlap.json"))
+    o.add_argument("--exclude-out", default=str(REPO / "runs/faceswap/v2_exclude.txt"))
+    o.add_argument("--workers", type=int, default=3)
+    o.add_argument("--config", default=None)
     sh = sub.add_parser("ship", help="apply docs/13 §6.3 and write the bundle the app loads")
     sh.add_argument("--bundle", required=True)
     sh.add_argument("--gate4a", required=True, help="JSON from check_faceswap_reals.py --manifest (frozen list)")
@@ -1350,7 +1481,7 @@ def main() -> None:
     sh.add_argument("--decision", default=str(REPO / "reports/faceswap_v2_decision.json"))
     a = ap.parse_args()
     {"fetch": cmd_fetch, "manifest": cmd_manifest, "extract": cmd_extract, "select": cmd_select,
-     "ship": cmd_ship}[a.cmd](a)
+     "overlap": cmd_overlap, "ship": cmd_ship}[a.cmd](a)
 
 
 if __name__ == "__main__":
