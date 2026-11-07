@@ -33,7 +33,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO / "scripts"))
 
-from trubeat import faceswap as fs  # noqa: E402
+from trubeat import faceswap as fs
 
 SIZES = (30, 60, 100, 200, 400)
 MIN_FACE_PX = 40   # configs/p6_faceswap.yaml: both finders ignore smaller faces by design
@@ -124,9 +124,9 @@ def synthetic_pass(paths: list[str], v1, v2, rng: np.random.Generator) -> pd.Dat
         if box is not None:
             sources.append((path, frame, box))
     for i, (path, frame, box) in enumerate(sources):
-        cx, cy, side = box
+        cx, cy, _ = box
         face = face_side(box)
-        region = fs.cut_square(frame, cx, cy, face * REGION, max(8, int(round(face * REGION))))
+        region = fs.cut_square(frame, cx, cy, face * REGION, max(8, round(face * REGION)))
         for cw, ch in CANVASES:
             bg = None
             for j in range(1, len(sources)):      # the next clip whose frame can be made face-free
@@ -136,7 +136,7 @@ def synthetic_pass(paths: list[str], v1, v2, rng: np.random.Generator) -> pd.Dat
             if bg is None:
                 continue
             for t in SIZES:
-                rs = int(round(t * REGION))
+                rs = round(t * REGION)
                 if rs >= min(cw, ch):
                     continue
                 patch = cv2.resize(region, (rs, rs), interpolation=cv2.INTER_AREA if rs < region.shape[0]
@@ -235,9 +235,9 @@ def main() -> None:
           "the whole frame; two-pass = that same pass first, and only when it finds nothing, YuNet on a <= 1280 px copy "
           "followed by the Landmarker on a 2x crop of each detection. Runtime "
           f"{(time.time() - t0) / 60:.0f} min."), "",
-         f"**Decision: {'adopt' if adopt else 'do not adopt'} the two-pass finder** "
-         f"(rule 1 {'pass' if r1 else 'fail'}, 2 {'pass' if r2 else 'fail'}, 3 {'pass' if r3 else 'fail'}, "
-         f"4 {'pass' if r4 else 'fail'}).", "",
+         (f"**Decision: {'adopt' if adopt else 'do not adopt'} the two-pass finder** "
+          f"(rule 1 {'pass' if r1 else 'fail'}, 2 {'pass' if r2 else 'fail'}, 3 {'pass' if r3 else 'fail'}, "
+          f"4 {'pass' if r4 else 'fail'})."), "",
          "## Rule 1: small faces pasted into a scene (found and landmarked)", "",
          (f"{syn.path.nunique()} faces from distinct test reals, each pasted as a region {REGION}x its landmark box "
           "into a frame of another clip resized to the canvas, with that frame's own faces filled flat and checked "
@@ -252,7 +252,7 @@ def main() -> None:
           f"differences): **{k3}/{len(both)} = {k3 / max(len(both), 1):.1%}** (rule: >= 95%) -> "
           f"{'pass' if r3 else '**fail**'}. Median difference {float(both.agree.median()) if len(both) else float('nan'):.3f} "
           "of the side."), "",
-         f"Two-pass source of the returned face: " + ", ".join(
+         "Two-pass source of the returned face: " + ", ".join(
              f"{k or 'none'} {v}" for k, v in frames.v2_source.value_counts().items()) + ".", "",
          "## Rule 4: cost", "",
          (f"YuNet detection on the sampled frames: mean {det_all:.0f} ms per frame over all sizes; "

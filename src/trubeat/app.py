@@ -93,7 +93,7 @@ class _ProgressPlan:
         self.spans: dict[str, tuple[float, float]] = {}
         if fn is None:
             return
-        n_frames, fps = _frame_count(path)
+        n_frames, fps = _frame_count(path, max_seconds)
         pulse = "pulse" in layers and fps > 0 and n_frames / fps >= ingest.MIN_DURATION_S
         n_tracked = min(n_frames, int(max_seconds * fps)) if pulse else 0
         costs = {
@@ -121,15 +121,12 @@ class _ProgressPlan:
         self.fn(min(0.99, a + (b - a) * max(0.0, min(1.0, frac))), desc)
 
 
-def _frame_count(path: Path) -> tuple[int, float]:
-    """(frames, fps) from container metadata; (0, 0.0) when unknown."""
-    import cv2
-
-    cap = cv2.VideoCapture(str(path))
-    try:
-        return int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0), float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
-    finally:
-        cap.release()
+def _frame_count(path: Path, max_seconds: float = MAX_ANALYSIS_SECONDS) -> tuple[int, float]:
+    """(frames, fps) for the progress plan: container metadata when it is
+    sane, else counted from frame timestamps (the extension's WebM reports
+    -2**63 frames at "1000 fps"; docs/13 A-08). (0, 0.0) when unreadable."""
+    pr = ingest.probe(path, max_seconds=max_seconds)
+    return max(0, int(pr.n_frames)), float(pr.fps)
 
 
 @dataclass(frozen=True)
@@ -268,10 +265,10 @@ def load_aigen(path: Path | str | None = None):
     if key not in _AIGEN_CACHE:
         try:
             bundle = aigen.find_bundle(path)
-        except Exception as exc:  # noqa: BLE001 — a broken bundle must not break the app
+            emb = aigen.Embedder(bundle["config"]) if bundle else None
+        except Exception as exc:  # noqa: BLE001 — a broken bundle must not break the app (docs/13 A-14)
             print(f"warning: could not load AI-video bundle: {exc}")
-            bundle = None
-        emb = aigen.Embedder(bundle["config"]) if bundle else None
+            bundle, emb = None, None
         _AIGEN_CACHE[key] = (bundle, emb)
     return _AIGEN_CACHE[key]
 
@@ -293,19 +290,26 @@ def load_faceswap(path: Path | str | None = None):
             bundle = None
         if bundle is None:
             return None, None, None  # not cached: a bundle installed later is picked up
-        if bundle.get("kind") == "cnn":
-            try:
-                emb = faceswap.CNNScorer.from_bundle(bundle)
-            except Exception as exc:  # noqa: BLE001 — weights not fetched: the layer says so
-                print(f"warning: face-swap CNN not usable: {exc}")
-                emb = None
-        else:
-            emb = faceswap.FaceEmbedder(cfg["backbone"], cfg["feature"], int(cfg["torch_threads"]),
-                                        img_size=int(cfg["crop_size"]))
-        entry = (bundle, emb, faceswap.FaceFinder(cfg))
+        try:
+            if bundle.get("kind") == "cnn":
+                try:
+                    emb = faceswap.CNNScorer.from_bundle(bundle)
+                except Exception as exc:  # noqa: BLE001 — weights not fetched: the layer says so
+                    print(f"warning: face-swap CNN not usable: {exc}")
+                    emb = None
+            else:
+                emb = faceswap.FaceEmbedder(cfg["backbone"], cfg["feature"], int(cfg["torch_threads"]),
+                                            img_size=int(cfg["crop_size"]))
+            finder = faceswap.FaceFinder(cfg)
+        except Exception as exc:  # noqa: BLE001 — a malformed bundle must not break the app (docs/13 A-14)
+            print(f"warning: could not load face-swap bundle: {exc}")
+            return None, None, None
         if emb is None:
-            return entry  # not cached: `trubeat fetch-models` may supply the weights later
-        _FS_CACHE[key] = entry
+            # not cached: `trubeat fetch-models` may supply the weights later; no
+            # finder either, so faceswap.analyze opens and closes its own
+            finder.close()
+            return bundle, None, None
+        _FS_CACHE[key] = (bundle, emb, finder)
     return _FS_CACHE[key]
 
 
@@ -319,6 +323,7 @@ def analyze_video(
     layers: tuple[str, ...] = ("provenance", "ai_video", "face_swap", "pulse"),
     progress: ProgressFn | None = None,
     faceswap_path: Path | str | None = None,
+    region: tuple[float, float, float, float] | None = None,
 ) -> PulseAnalysis:
     """Run every analysis layer on one video and fuse them (docs/11 E1).
 
@@ -328,6 +333,8 @@ def analyze_video(
     ``layers`` and, when nothing could run, the verdict is inconclusive.
     ``progress(fraction, stage)``, when given, is called as each stage
     advances (the web app's progress bar); it never reaches 1.0 here.
+    ``region`` = (x0, y0, x1, y1) in source pixels limits every layer to that
+    part of the frame (the browser extension's video element, docs/13 §3.4).
     """
     config = dict(config or {})
     thr = thresholds or DEFAULT_THRESHOLDS
@@ -343,13 +350,13 @@ def analyze_video(
         _provenance_layer(a, path)
     if "ai_video" in layers:
         bar("ai_video", 0.0, "AI-video detector: loading the model")
-        _ai_video_layer(a, path, aigen_path, bar)
+        _ai_video_layer(a, path, aigen_path, bar, region)
     if "face_swap" in layers:
         bar("face_swap", 0.0, "Face-swap detector: loading the model")
-        _face_swap_layer(a, path, faceswap_path, bar)
+        _face_swap_layer(a, path, faceswap_path, bar, region)
     if "pulse" in layers:
         bar("decode", 0.0, "Pulse: decoding the video")
-        _pulse_layer(a, path, config, model_path, thr, max_seconds, bar)
+        _pulse_layer(a, path, config, model_path, thr, max_seconds, bar, region)
     return verdict_for(a, thr)
 
 
@@ -368,7 +375,7 @@ def _provenance_layer(a: PulseAnalysis, path: Path) -> None:
 
 
 def _ai_video_layer(a: PulseAnalysis, path: Path, aigen_path,
-                    bar: _ProgressPlan | None = None) -> None:
+                    bar: _ProgressPlan | None = None, region=None) -> None:
     from . import aigen
     from .errors import ModelMissing
 
@@ -381,6 +388,7 @@ def _ai_video_layer(a: PulseAnalysis, path: Path, aigen_path,
         res = aigen.analyze(
             path, bundle, embedder=embedder,
             progress=(lambda f, s: bar("ai_video", f, f"AI-video detector: {s}")) if bar else None,
+            region=region,
         )
     except ModelMissing as exc:
         a.layers["ai_video"] = f"not available: {exc}"
@@ -409,7 +417,7 @@ def _ai_video_layer(a: PulseAnalysis, path: Path, aigen_path,
 
 
 def _face_swap_layer(a: PulseAnalysis, path: Path, faceswap_path,
-                     bar: _ProgressPlan | None = None) -> None:
+                     bar: _ProgressPlan | None = None, region=None) -> None:
     """The face-swap detector (docs/12): runs on any clip with a visible face."""
     from . import faceswap
     from .errors import ModelMissing
@@ -422,6 +430,7 @@ def _face_swap_layer(a: PulseAnalysis, path: Path, faceswap_path,
         res = faceswap.analyze(
             path, bundle, embedder=emb, finder=finder,
             progress=(lambda f, s: bar("face_swap", f, f"Face-swap detector: {s}")) if bar else None,
+            region=region,
         )
         mode = str(bundle.get("mode", "evidence"))
         target_fpr = float(faceswap.merged_config(bundle["config"])["target_fpr"])
@@ -458,6 +467,7 @@ def _pulse_layer(
     a: PulseAnalysis, path: Path, config: dict, model_path, thr: VerdictThresholds,
     max_seconds: float,
     bar: _ProgressPlan | None = None,
+    region=None,
 ) -> None:
     """Face tracking, per-region pulse, and the G2 face-swap score."""
     bar = bar or _ProgressPlan(None, path, (), max_seconds)
@@ -466,6 +476,8 @@ def _pulse_layer(
             str(path),
             frame_height=config.get("frame_height", ingest.DEFAULT_FRAME_HEIGHT),
             progress=lambda i, n: bar("decode", i / n, f"Pulse: decoding frame {i} of {n}"),
+            max_seconds=max_seconds,     # docs/13 A-02: never decode past what is analysed
+            region=region,
         )
     except TrueBeatError as exc:
         if exc.code == "E_SHORT_VIDEO":
@@ -484,22 +496,24 @@ def _pulse_layer(
     duration = float(stream.duration_s)
     fps = stream.fps
     frames = stream.frames
-    if duration > max_seconds:
-        # Analyse the first `max_seconds` of the clip.
-        frames = frames[: int(max_seconds * fps)]
-        a.warnings.append(
-            f"W_TRUNCATED: analysed the first {max_seconds:.0f}s of a {duration:.0f}s clip"
-        )
+    if stream.truncated:
+        whole = f" of a {stream.full_duration_s:.0f}s clip" if stream.full_duration_s else ""
+        a.warnings.append(f"W_TRUNCATED: the pulse layer analysed the first {duration:.0f}s{whole}")
 
     # The G2 bundle decides the rPPG method and window (it was trained with
     # them; using the config's would feed the model the wrong features).
     bundle = load_detector(model_path)
-    if bundle is not None:
-        method = str(bundle.get("method") or config.get("method", "green"))
-        win_s = float(bundle.get("window_s", config.get("window_s", 10.0)))
-    else:
-        method = str(config.get("method", "green"))
-        win_s = float(config.get("window_s", 10.0))
+    try:
+        if bundle is not None:
+            method = str(bundle.get("method") or config.get("method", "green"))
+            win_s = float(bundle.get("window_s", config.get("window_s", 10.0)))
+        else:
+            method = str(config.get("method", "green"))
+            win_s = float(config.get("window_s", 10.0))
+    except Exception as exc:  # noqa: BLE001 — a malformed bundle must not break the app (docs/13 A-14)
+        a.layers["pulse"] = f"failed: the pulse model bundle is malformed ({type(exc).__name__})"
+        a.warnings.append("W_PULSE_FAILED")
+        return
 
     try:
         landmarks, valid = face.track_landmarks(
@@ -541,6 +555,9 @@ def _pulse_layer(
     detector_score: float | None = None
     swap_note = ""
     face_ok = face_valid_frac >= thr.min_face_valid_frac
+    if not face_ok:
+        a.warnings.append(f"W_UNSTABLE_TRACK: face tracked in {face_valid_frac:.0%} of frames "
+                          f"(needs {thr.min_face_valid_frac:.0%})")   # docs/04 §8; docs/13 A-10
     if bundle is not None and face_ok:
         try:
             feat = features.window_features(
@@ -643,18 +660,24 @@ def verdict_for(analysis: PulseAnalysis, thresholds: VerdictThresholds | None = 
     a = analysis
     prov = a.provenance or {}
 
+    # Content Credentials decide only when their signature checks out
+    # (docs/13 A-19): an unsigned or broken manifest declaring AI generation
+    # is a claim anyone can paste into a real video, so it is evidence only.
+    prov_note = ""
     if prov.get("ai_declared"):
         gen = prov.get("generator")
-        a.verdict, a.decided_by = "fake", "provenance"
-        a.headline = "AI-generated: declared by its Content Credentials"
-        a.detail = (
-            "The file carries a C2PA manifest whose history declares generation "
-            f"by a trained model{f' ({gen})' if gen else ''}."
-        )
         state = prov.get("validation_state")
-        if state not in (None, "Valid", "Trusted"):
-            a.detail += f" The manifest's signature check reads {state!r}, so treat it with care."
-        return a
+        if state in ("Valid", "Trusted"):
+            a.verdict, a.decided_by = "fake", "provenance"
+            a.headline = "AI-generated: declared by its Content Credentials"
+            a.detail = (
+                "The file carries a C2PA manifest whose history declares generation "
+                f"by a trained model{f' ({gen})' if gen else ''}; its signature checks out ({state})."
+            )
+            return a
+        prov_note = (f" Its Content Credentials claim AI generation{f' ({gen})' if gen else ''}, but their "
+                     f"signature could not be verified ({state or 'no validation result'}), so that claim "
+                     "was not used to decide.")
 
     if a.ai_label == "ai" and a.ai_score is not None:
         a.verdict, a.decided_by = "fake", "ai_video"
@@ -669,6 +692,7 @@ def verdict_for(analysis: PulseAnalysis, thresholds: VerdictThresholds | None = 
                 f" That is higher than {a.ai_real_percentile:.0%} of the real "
                 "validation clips."
             )
+        a.detail += prov_note
         return a
 
     fsd_decides = a.fsd_mode == "decisive" and a.fsd_available
@@ -686,6 +710,7 @@ def verdict_for(analysis: PulseAnalysis, thresholds: VerdictThresholds | None = 
             a.detail += f" The most suspicious face is at {a.fsd_top_time_s:.1f} s (shown below)."
         if a.ai_label == "real":
             a.detail += " The whole-frame AI-video detector did not flag the clip."
+        a.detail += prov_note
         return a
 
     # The pulse check decides only when the face-swap detector could not
@@ -706,6 +731,7 @@ def verdict_for(analysis: PulseAnalysis, thresholds: VerdictThresholds | None = 
                          f"({a.fsd_score:+.2f}, threshold {a.fsd_threshold:+.2f}).")
         if a.ai_label == "real":
             a.detail += " The whole-frame AI-video detector did not flag the clip."
+        a.detail += prov_note
         return a
 
     if a.ai_label == "real" and a.ai_score is not None:
@@ -733,6 +759,7 @@ def verdict_for(analysis: PulseAnalysis, thresholds: VerdictThresholds | None = 
             f"threshold of {a.ai_threshold:+.2f}. {swap} This is not proof the video "
             "is authentic: see the caveat."
         )
+        a.detail += prov_note
         return a
 
     a.verdict, a.decided_by = "inconclusive", ""
@@ -742,7 +769,7 @@ def verdict_for(analysis: PulseAnalysis, thresholds: VerdictThresholds | None = 
         if unreadable
         else "Inconclusive: no check could reach a decision"
     )
-    a.detail = "; ".join(f"{k}: {v}" for k, v in a.layers.items()) + "."
+    a.detail = "; ".join(f"{k}: {v}" for k, v in a.layers.items()) + "." + prov_note
     return a
 
 
@@ -884,6 +911,78 @@ _SEEK_JS = """(t) => {
 }"""
 
 
+def api_payload(a: PulseAnalysis) -> dict:
+    """The JSON the browser extension reads (one place, unit-tested; docs/13 D-08).
+    Images never travel here."""
+    finite_hr = [b for b in a.per_roi_hr if np.isfinite(b)]
+    return {
+        "verdict": a.verdict,
+        "headline": a.headline,
+        "detail": a.detail,
+        "score": a.detector_score,
+        "hr_bpm": float(np.mean(finite_hr)) if finite_hr else None,
+        "region_agreement_bpm": a.agreement_bpm,
+        "snr": a.pulse_snr_db,
+        "pulse_measurable": a.pulse_measurable,
+        "face_valid_frac": a.face_valid_frac,
+        "ai_label": a.ai_label,
+        "ai_real_percentile": a.ai_real_percentile,
+        "ai_score": a.ai_score,
+        "ai_threshold": a.ai_threshold,
+        "decided_by": a.decided_by,
+        # The face-swap detector (docs/12): its own score and threshold, so a
+        # verdict it decides carries its numbers.
+        **{k: getattr(a, k) for k in (
+            "fsd_mode", "fsd_label", "fsd_score", "fsd_threshold", "fsd_target_fpr", "fsd_outside_fpr",
+            "fsd_real_percentile", "fsd_n_faces", "fsd_n_sampled", "fsd_top_time_s")},
+        "layers": a.layers,
+        "provenance": a.provenance,
+        "duration_s": a.duration_s,
+        "warnings": list(a.warnings),
+        "per_roi_hr": {n: (float(b) if np.isfinite(b) else None) for n, b in zip(a.roi_names, a.per_roi_hr)},
+        "qc": {
+            "ok": a.verdict != "inconclusive",
+            "face_valid_frac": a.face_valid_frac,
+            "snr": a.pulse_snr_db,
+            "duration_s": a.duration_s,
+            "degraded": a.degraded,
+            "warnings": a.warnings,
+        },
+        "caveat": CAVEAT,
+    }
+
+
+API_PAYLOAD_KEYS = (
+    "verdict", "headline", "detail", "score", "hr_bpm", "region_agreement_bpm", "snr", "pulse_measurable",
+    "face_valid_frac", "ai_label", "ai_real_percentile", "ai_score", "ai_threshold", "decided_by", "fsd_mode",
+    "fsd_label", "fsd_score", "fsd_threshold", "fsd_target_fpr", "fsd_outside_fpr", "fsd_real_percentile",
+    "fsd_n_faces", "fsd_n_sampled", "fsd_top_time_s", "layers", "provenance", "duration_s", "warnings",
+    "per_roi_hr", "qc", "caveat",
+)
+
+
+def parse_region(text: str | None) -> tuple[float, float, float, float] | None:
+    """The extension's region: JSON {"x0":..,"y0":..,"x1":..,"y1":..} in the
+    recording's pixels, or empty. Anything else is ignored (whole frame)."""
+    if not text:
+        return None
+    try:
+        r = json.loads(text) if isinstance(text, str) else dict(text)
+        x0, y0, x1, y1 = (float(r[k]) for k in ("x0", "y0", "x1", "y1"))
+    except (ValueError, TypeError, KeyError):
+        return None
+    if not all(np.isfinite(v) for v in (x0, y0, x1, y1)) or x1 - x0 < 16 or y1 - y0 < 16:
+        return None
+    return x0, y0, x1, y1
+
+
+# Uploads (and the rendered face image) live in Gradio's cache; files older
+# than this are deleted every few minutes (docs/13 A-04). The extension's
+# captures are deleted as soon as their analysis returns.
+UPLOAD_MAX_AGE_S = 3600
+UPLOAD_SWEEP_S = 300
+
+
 def build_demo(
     config: dict | None = None,
     model_path: Path | str | None = DEFAULT_MODEL_PATH,
@@ -898,8 +997,7 @@ def build_demo(
         if progress is None:
             progress = gr.Progress()
         if not video_path:
-            return ("Upload a video first.", "", "", gr.update(value=None, visible=False), None,
-                    CAVEAT, None)
+            return ("Upload a video first.", "", "", gr.update(value=None, visible=False), None, None)
         progress(0.0, desc="Starting")
         analysis = analyze_video(
             video_path, cfg, model_path=model_path, thresholds=thresholds,
@@ -915,11 +1013,14 @@ def build_demo(
                        f"{analysis.fsd_score:+.2f}"
                        f"{'' if analysis.fsd_mode == 'decisive' else ', evidence only'}")
             face, seek = gr.update(value=img, label=caption, visible=True), analysis.fsd_top_time_s
-        return (analysis.headline, analysis.detail, evidence, face, _plot(analysis), CAVEAT, seek)
+        return (analysis.headline, analysis.detail, evidence, face, _plot(analysis), seek)
 
     # Note (gradio 6+): theme/CSS moved from the Blocks constructor to
     # demo.launch(); they are applied in main() from _ui_theme()/UI_CSS.
-    with gr.Blocks(title="TrueBeat: AI-video and deepfake check") as demo:
+    # No analytics beacon, whoever launches the app (docs/13 A-18), and an
+    # hourly sweep of uploaded videos (A-04).
+    with gr.Blocks(title="TrueBeat: AI-video and deepfake check", analytics_enabled=False,
+                   delete_cache=(UPLOAD_SWEEP_S, UPLOAD_MAX_AGE_S)) as demo:
         gr.Markdown(
             "# TrueBeat: AI-video and deepfake check\n"
             "Upload a video (2–120 s). Every check runs on this machine. "
@@ -948,17 +1049,19 @@ def build_demo(
                                     interactive=False, visible=False)
                 seek = gr.Number(visible=False, elem_id="tb-seek")
         plot = gr.Plot(label="Per-region pulse waveforms", elem_id="tb-plot")
-        caveat = gr.Markdown(
-            f"**Caveat: always applies:** {CAVEAT}", elem_id="tb-caveat"
-        )
+        gr.Markdown(f"**Caveat: always applies:** {CAVEAT}", elem_id="tb-caveat")
         # One loader, one place: the Plot panel is the output the user
         # watches. Without this Gradio renders the progress overlay on every
         # output (a duplicate sat over the caveat). Outputs stay unchanged.
+        # The caveat is static (outputs no longer overwrite it, so its heading
+        # stays; docs/13 C-15). Every analysis shares one queue, so the web
+        # app and the extension never run two at once on a 7 GB laptop (A-05).
         btn.click(
             run,
             inputs=[video],
-            outputs=[verdict, detail, evidence, face_img, plot, caveat, seek],
+            outputs=[verdict, detail, evidence, face_img, plot, seek],
             show_progress_on=[plot],
+            concurrency_id="analysis",
         ).then(None, inputs=[seek], outputs=None, js=_SEEK_JS)
         # a new upload hides the previous clip's frame until it is analysed
         video.change(lambda _v: gr.update(value=None, visible=False), inputs=[video],
@@ -969,55 +1072,25 @@ def build_demo(
         # computed — no new pipeline, no new thresholds, no recalibration.
         # Wired through a hidden button so the input type is the same
         # FileData the upload flow sends.
-        def analyze_json(video_path):
-            a = analyze_video(
-                video_path, cfg, model_path=model_path, thresholds=thresholds
-            )
-            finite_hr = [b for b in a.per_roi_hr if np.isfinite(b)]
-            return json.dumps(
-                {
-                    "verdict": a.verdict,
-                    "headline": a.headline,
-                    "detail": a.detail,
-                    "score": a.detector_score,
-                    "hr_bpm": float(np.mean(finite_hr)) if finite_hr else None,
-                    "region_agreement_bpm": a.agreement_bpm,
-                    "snr": a.pulse_snr_db,
-                    "face_valid_frac": a.face_valid_frac,
-                    "ai_label": a.ai_label,
-                    "ai_real_percentile": a.ai_real_percentile,
-                    "ai_score": a.ai_score,
-                    "ai_threshold": a.ai_threshold,
-                    "decided_by": a.decided_by,
-                    # The face-swap detector (docs/12): its own score and
-                    # threshold, so a verdict it decides carries its numbers.
-                    **{k: getattr(a, k) for k in (
-                        "fsd_mode", "fsd_label", "fsd_score", "fsd_threshold", "fsd_target_fpr",
-                        "fsd_outside_fpr",
-                        "fsd_real_percentile", "fsd_n_faces", "fsd_n_sampled", "fsd_top_time_s")},
-                    "layers": a.layers,
-                    "provenance": a.provenance,
-                    "duration_s": a.duration_s,
-                    "per_roi_hr": {
-                        n: (float(b) if np.isfinite(b) else None)
-                        for n, b in zip(a.roi_names, a.per_roi_hr)
-                    },
-                    "qc": {
-                        "ok": a.verdict != "inconclusive",
-                        "face_valid_frac": a.face_valid_frac,
-                        "snr": a.pulse_snr_db,
-                        "duration_s": a.duration_s,
-                        "degraded": a.degraded,
-                        "warnings": a.warnings,
-                    },
-                    "caveat": CAVEAT,
-                }
-            )
+        def analyze_json(video_path, region_text=None):
+            """The extension's call: analyse the uploaded capture (optionally only
+            the video element's region), then delete the capture (docs/13 A-04)."""
+            try:
+                a = analyze_video(video_path, cfg, model_path=model_path, thresholds=thresholds,
+                                  region=parse_region(region_text))
+                return json.dumps(api_payload(a))
+            finally:
+                try:
+                    if video_path:
+                        Path(video_path).unlink(missing_ok=True)
+                except OSError:
+                    pass
 
         api_btn = gr.Button(visible=False)
         api_out = gr.Textbox(label="result", visible=False)
+        api_region = gr.Textbox(label="region", visible=False)
         api_btn.click(
-            analyze_json,
+            lambda v: analyze_json(v, None),
             inputs=[video],
             outputs=[api_out],
             api_name="analyze_video",
@@ -1025,6 +1098,20 @@ def build_demo(
                 "Analyse a video of a face; returns JSON with the verdict, "
                 "the evidence numbers and the standing caveat."
             ),
+            concurrency_id="analysis",
+        )
+        api_btn2 = gr.Button(visible=False)
+        api_btn2.click(
+            analyze_json,
+            inputs=[video, api_region],
+            outputs=[api_out],
+            api_name="analyze_video_region",
+            api_description=(
+                "As analyze_video, limited to a region of the frame given as JSON "
+                '{"x0":..,"y0":..,"x1":..,"y1":..} in the video\'s pixels (the extension sends the '
+                "video element's box)."
+            ),
+            concurrency_id="analysis",
         )
     return demo
 
@@ -1139,6 +1226,9 @@ def main(argv: list[str] | None = None) -> int:
 
     p = argparse.ArgumentParser(prog="trubeat serve")
     p.add_argument("--port", type=int, default=7860)
+    p.add_argument("--host", default="127.0.0.1",
+                   help="address to listen on (default: this machine only; 0.0.0.0 lets every device on "
+                        "the network upload videos to it)")
     p.add_argument("--share", action="store_true",
                    help="create a temporary public Gradio link (uploads leave "
                         "this machine: use only for demos)")
@@ -1179,10 +1269,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.share:
         print("WARNING: --share exposes this app publicly. Uploaded videos "
               "leave this machine. Use it for demos only.")
+    if args.host not in ("127.0.0.1", "localhost", "::1"):
+        print(f"WARNING: listening on {args.host}: any device that can reach this machine can upload "
+              "videos to it. Use only on a network you trust.")
     demo.launch(
-        server_name="0.0.0.0",
+        server_name=args.host,          # docs/13 A-03: this machine only, unless asked
         server_port=args.port,
         share=args.share,
+        max_file_size="2gb",            # A-04: an upload cannot fill the disk (or a RAM-backed /tmp)
+        show_error=True,                # C-01: the extension sees the real error, not {"error": null}
         # the v4 web look (theme + CSS moved from Blocks to launch in gradio 6)
         theme=_ui_theme(),
         css=UI_CSS,

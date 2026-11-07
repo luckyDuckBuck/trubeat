@@ -85,14 +85,18 @@ def test_provenance_declaration_outranks_the_detectors():
     assert "GenModel 2" in a.detail
 
 
-def test_unverified_provenance_still_decides_but_says_so():
-    a = verdict_for(
-        _analysis(provenance={"has_c2pa": True, "ai_declared": True,
-                              "validation_state": "Invalid"}),
-        THR,
-    )
-    assert a.verdict == "fake"
-    assert "'Invalid'" in a.detail
+def test_unverified_provenance_is_evidence_not_a_verdict():
+    # docs/13 A-19: a manifest whose signature does not check out is a claim anyone
+    # can paste into a real video; it is stated, and the other layers decide
+    for state in ("Invalid", None):
+        a = verdict_for(
+            _analysis(provenance={"has_c2pa": True, "ai_declared": True, "generator": "GenModel 2",
+                                  "validation_state": state}),
+            THR,
+        )
+        assert a.decided_by != "provenance" and a.verdict == "real"
+        assert "could not be verified" in a.detail and "not used to decide" in a.detail
+        assert "GenModel 2" in a.detail
 
 
 def test_faceswap_boundary_is_inclusive():
@@ -525,3 +529,46 @@ def test_suspicious_frame_outlines_the_face_and_fits_the_panel():
     assert a.fsd_top_frame.sum() == 0  # the analysis' frame is not drawn on
     a.fsd_top_box = (-50, -50, 400, 400)  # a box past the frame edge is clipped, not an error
     assert app_mod.suspicious_frame(a) is not None
+
+
+# ------------------------------------------------- docs/13 round-4 app fixes
+
+def test_api_payload_carries_exactly_the_documented_keys():
+    # docs/13 D-08: one place builds the extension's JSON; the JS harness reads
+    # the same key list from tests/js/api_keys.json
+    import json
+
+    a = verdict_for(_fsd("swap", 1.4, mode="evidence", fsd_outside_fpr=0.38), THR)
+    d = app_mod.api_payload(a)
+    assert tuple(d) == app_mod.API_PAYLOAD_KEYS
+    assert "pulse_measurable" in d and isinstance(d["warnings"], list)   # docs/13 C-09
+    json.dumps(d)                                                         # serialisable as is
+    fixture = Path(__file__).parent / "js" / "api_keys.json"
+    assert json.loads(fixture.read_text()) == list(app_mod.API_PAYLOAD_KEYS), (
+        "tests/js/api_keys.json is stale: regenerate it from app.API_PAYLOAD_KEYS")
+
+
+def test_parse_region_accepts_only_a_sane_box():
+    assert app_mod.parse_region('{"x0": 10, "y0": 20, "x1": 650, "y1": 380}') == (10, 20, 650, 380)
+    for bad in (None, "", "nope", '{"x0": 1}', '{"x0": 0, "y0": 0, "x1": 5, "y1": 5}',
+                '{"x0": "a", "y0": 0, "x1": 100, "y1": 100}'):
+        assert app_mod.parse_region(bad) is None
+
+
+def test_region_reaches_every_layer(tmp_path, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(app_mod, "_ai_video_layer", lambda a, p, ap, bar, region: seen.update(ai=region))
+    monkeypatch.setattr(app_mod, "_face_swap_layer", lambda a, p, fp, bar, region: seen.update(fs=region))
+    monkeypatch.setattr(app_mod, "_pulse_layer",
+                        lambda a, p, c, m, thr, ms, bar, region: seen.update(pulse=region))
+    p = tmp_path / "clip.mp4"
+    p.write_bytes(b"x")
+    app_mod.analyze_video(p, region=(0, 0, 320, 240), layers=("ai_video", "face_swap", "pulse"))
+    assert seen == {"ai": (0, 0, 320, 240), "fs": (0, 0, 320, 240), "pulse": (0, 0, 320, 240)}
+
+
+def test_untracked_face_is_flagged_as_unstable(tmp_path, no_aigen):
+    # docs/04 §8 / docs/13 A-10: below 70% tracking the pulse layer says so in warnings
+    p = synth.write_pulse_video(tmp_path / "noface.mp4", fps=30.0, duration_s=11.0)
+    a = app_mod.analyze_video(p, config={"method": "green"}, layers=("pulse",))
+    assert any(w.startswith("W_UNSTABLE_TRACK") for w in a.warnings)

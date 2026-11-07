@@ -69,10 +69,13 @@ def test_tall_video_is_downscaled(tmp_path):
     writer.release()
 
     vs = open_video(str(p))
-    assert vs.frames.shape[1] == 480, "frame height not capped"
-    assert vs.frames.shape[2] == pytest.approx(w * 480 / h, abs=2)
+    # docs/13 A-17: the short side (320) is under the cap and stays; the
+    # long side is capped at 16/9 x 480 = 853 so memory stays bounded.
+    assert vs.frames.shape[1] == 853, "long side not capped"
+    assert vs.frames.shape[2] == pytest.approx(w * 853 / h, abs=2)
     # Aspect ratio preserved (within rounding).
     assert vs.frames.shape[2] / vs.frames.shape[1] == pytest.approx(w / h, rel=0.02)
+    assert (vs.width, vs.height) == (vs.frames.shape[2], vs.frames.shape[1])
 
 
 def test_downscale_never_upscales(tmp_path):
@@ -157,3 +160,99 @@ def test_decode_reports_progress_for_the_progress_bar(tmp_path):
     done = [i for i, _ in calls]
     assert done == sorted(done) and all(n == vs.n_frames for _, n in calls)
     assert 0 < done[-1] <= vs.n_frames
+
+
+# ------------------------------------------- docs/13 A-01, A-02, A-17, region
+
+def test_decode_scale_caps_the_short_side_and_the_long_side():
+    from trubeat.ingest import decode_scale
+
+    assert decode_scale(1920, 1080, 480) == pytest.approx(480 / 1080)      # landscape: 853 x 480
+    assert decode_scale(1080, 1920, 480) == pytest.approx(480 / 1080)      # portrait: 480 x 853, not 270 x 480
+    assert decode_scale(320, 1080, 480) == pytest.approx(853.33 / 1080, rel=1e-3)
+    assert decode_scale(640, 480, 480) == 1.0 and decode_scale(320, 240, 480) == 1.0
+    assert decode_scale(1920, 1080, None) == 1.0
+
+
+def test_clip_region_clips_and_rejects():
+    from trubeat.ingest import clip_region
+
+    assert clip_region(None, 640, 480) is None
+    assert clip_region((-10, 20, 700, 300), 640, 480) == (0, 20, 640, 300)
+    with pytest.raises(UnreadableVideo):
+        clip_region((630, 470, 700, 500), 640, 480)
+
+
+def _write(path, w, h, n, fps=30.0, value=None):
+    cv2 = pytest.importorskip("cv2")
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
+    for i in range(n):
+        frame = np.zeros((h, w, 3), dtype=np.uint8)
+        frame[:, : w // 2] = 200 if value is None else value     # left half bright
+        writer.write(frame)
+    writer.release()
+    return path
+
+
+def test_max_seconds_stops_decoding_and_says_so(tmp_path):
+    p = _write(tmp_path / "long.mp4", 160, 120, 600)               # 20 s at 30 fps
+    vs = open_video(str(p), max_seconds=12.0)
+    assert vs.truncated and 11.9 <= vs.duration_s <= 12.2
+    assert vs.full_duration_s == pytest.approx(20.0, abs=0.1)
+    whole = open_video(str(p))
+    assert not whole.truncated and whole.n_frames == 600
+
+
+def test_budget_truncates_instead_of_refusing(tmp_path, monkeypatch):
+    # docs/13 A-02: a long 1080p clip used to fail as "unreadable" before the 120 s cut
+    import trubeat.ingest as ingest_mod
+
+    p = _write(tmp_path / "budget.mp4", 160, 120, 600)
+    monkeypatch.setattr(ingest_mod, "MAX_DECODED_BYTES", 160 * 120 * 3 * 400)   # room for 400 frames
+    vs = open_video(str(p))
+    assert vs.truncated and vs.n_frames == 400
+
+
+def test_region_crops_before_anything_else(tmp_path):
+    p = _write(tmp_path / "region.mp4", 320, 240, 330)
+    vs = open_video(str(p), region=(0, 0, 160, 240))              # only the bright half
+    assert vs.frames.shape[1:3] == (240, 160) and vs.frames.mean() > 150
+
+
+def test_webm_without_a_frame_count_is_downscaled_and_bounded(monkeypatch):
+    # docs/13 A-01: a MediaRecorder WebM (-2**63 frames at "1000 fps") skipped
+    # the downscale and the byte budget, holding every native frame twice.
+    import cv2
+
+    import trubeat.ingest as ingest_mod
+
+    class FakeCapture:                                  # 1280x720, 30 fps by timestamp, 20 s
+        def __init__(self, path):
+            self.i = -1
+
+        def isOpened(self):
+            return True
+
+        def get(self, prop):
+            return {cv2.CAP_PROP_FPS: 1000.0, cv2.CAP_PROP_FRAME_COUNT: -9.223372036854776e18,
+                    cv2.CAP_PROP_POS_MSEC: self.i * 1000.0 / 30.0}.get(prop, 0.0)
+
+        def read(self):
+            if self.i + 1 >= 600:
+                return False, None
+            self.i += 1
+            return True, np.full((720, 1280, 3), self.i % 255, np.uint8)
+
+        def grab(self):
+            ok, _ = self.read()
+            return ok
+
+        def release(self):
+            pass
+
+    monkeypatch.setattr(ingest_mod.cv2, "VideoCapture", FakeCapture)
+    monkeypatch.setattr(ingest_mod.Path, "is_file", lambda self: True)
+    vs = open_video("capture.webm", max_seconds=15.0)
+    assert vs.frames.shape[1:3] == (480, 853)          # downscaled like any other clip
+    assert abs(vs.fps - 30.0) < 0.5 and vs.truncated and 14.9 <= vs.duration_s <= 15.1
+    assert (vs.width, vs.height) == (853, 480)

@@ -42,6 +42,10 @@ DEFAULT_CONFIG: dict = {
     "n_frames": 16,
     "max_segments": 3,
     "min_duration_s": 2.0,
+    # Only the first max_seconds are read, with or without ffmpeg (docs/13
+    # A-06: without ffmpeg the whole upload used to be decoded and segments
+    # were spread over all of it).
+    "max_seconds": 120.0,
     "cache_dir": "data/processed/aigen_emb",
     # Title-card guard (docs/12 item A), inference only: a segment whose
     # frames are mostly flat 8x8 blocks AND still (mean grey-level change
@@ -115,7 +119,7 @@ def _prep(frame_bgr: np.ndarray, size: int) -> np.ndarray:
 
 
 def _decode_reservoir(
-    p: Path, cfg: dict, index_time: bool
+    p: Path, cfg: dict, index_time: bool, region: tuple | None = None
 ) -> tuple[list[float], dict[int, np.ndarray], dict]:
     """One decode pass. Keeps one prepared frame per 1/sample_fps grid point
     (a superset of every segment's frames) plus every frame's timestamp.
@@ -127,13 +131,17 @@ def _decode_reservoir(
 
     Timestamps come from CAP_PROP_POS_MSEC (the PTS of the frame just
     grabbed), or from frame index / metadata fps when ``index_time``.
+    Decoding stops after ``max_seconds``. ``region`` (x0, y0, x1, y1, source
+    pixels) crops each kept frame first.
     """
     import cv2
+
+    from .ingest import clip_region
 
     cap = cv2.VideoCapture(str(p))
     try:
         if not cap.isOpened():
-            raise UnreadableVideo(f"cannot open video: {p}")
+            raise UnreadableVideo(f"cannot open video: {p.name}")
         fps_meta = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
         info = {
             "fps_meta": fps_meta,
@@ -142,6 +150,8 @@ def _decode_reservoir(
             "height": int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0),
         }
         size = int(cfg["img_size"])
+        box = clip_region(region, info["width"], info["height"]) if region is not None else None
+        limit_ms = float(cfg.get("max_seconds", 120.0)) * 1000.0
         interval_ms = 1000.0 / float(cfg["sample_fps"])
         stamps: list[float] = []
         kept: dict[int, np.ndarray] = {}
@@ -155,10 +165,14 @@ def _decode_reservoir(
                 ts = float(cap.get(cv2.CAP_PROP_POS_MSEC))
             if t0 is None:
                 t0 = ts  # streams may start at a non-zero PTS
+            if ts - t0 > limit_ms:
+                break
             stamps.append(ts)
             if ts - t0 >= k * interval_ms - 1e-6:
                 ok, frame = cap.retrieve()
                 if ok:
+                    if box is not None:
+                        frame = frame[box[1]:box[3], box[0]:box[2]]
                     kept[k] = _prep(frame, size)
                     # skip grid points this frame already passed (low fps)
                     k = int(np.floor((ts - t0) / interval_ms + 1e-9)) + 1
@@ -169,7 +183,8 @@ def _decode_reservoir(
 
 
 def sample_segments(
-    path: str | Path, config: dict | None = None, starts_s: list[float] | None = None
+    path: str | Path, config: dict | None = None, starts_s: list[float] | None = None,
+    region: tuple | None = None,
 ) -> tuple[np.ndarray, dict]:
     """Decode fixed-rate frame segments from a video.
 
@@ -186,14 +201,14 @@ def sample_segments(
     cfg = merged_config(config)
     p = Path(path)
     if not p.is_file():
-        raise UnreadableVideo(f"not a file: {path}")
-    stamps, kept, info = _decode_reservoir(p, cfg, index_time=False)
+        raise UnreadableVideo(f"not a file: {p.name}")
+    stamps, kept, info = _decode_reservoir(p, cfg, index_time=False, region=region)
     if not stamps:
-        raise UnreadableVideo(f"no decodable frames: {path}")
+        raise UnreadableVideo(f"no decodable frames: {p.name}")
     if len(stamps) > 1 and not stamps[-1] > stamps[0]:
         if info["fps_meta"] <= 0:
-            raise UnreadableVideo(f"no usable timestamps or fps metadata: {path}")
-        stamps, kept, info = _decode_reservoir(p, cfg, index_time=True)
+            raise UnreadableVideo(f"no usable timestamps or fps metadata: {p.name}")
+        stamps, kept, info = _decode_reservoir(p, cfg, index_time=True, region=region)
     rel_s = (np.asarray(stamps) - stamps[0]) / 1000.0
     if len(rel_s) > 1:
         duration_s = float(rel_s[-1] * len(rel_s) / (len(rel_s) - 1))
@@ -259,12 +274,13 @@ def is_graphic(segment: np.ndarray, config: dict | None = None) -> bool:
             and segment_motion(segment) < float(cfg["graphics_max_motion"]))
 
 
-def guarded_segments(path: str | Path, config: dict | None = None) -> tuple[np.ndarray, dict]:
+def guarded_segments(path: str | Path, config: dict | None = None,
+                     region: tuple | None = None) -> tuple[np.ndarray, dict]:
     """sample_segments with title cards removed: graphic segments are dropped;
     if every segment is graphic, the first natural 2 s segment within
     ``graphics_search_s`` is used. Raises GraphicsOnly when there is none."""
     cfg = merged_config(config)
-    frames, meta = sample_segments(path, cfg)
+    frames, meta = sample_segments(path, cfg, region=region)
     flags = [is_graphic(s, cfg) for s in frames]
     meta["n_graphic_skipped"] = int(sum(flags))
     meta["n_segments_fit"] = int(meta.get("n_segments", len(frames)))  # before any were skipped
@@ -275,7 +291,7 @@ def guarded_segments(path: str | Path, config: dict | None = None) -> tuple[np.n
         span = (int(cfg["n_frames"]) - 1) / float(cfg["sample_fps"])
         cand = [k * span for k in range(1, int(float(cfg["graphics_search_s"]) // span) + 1)]
         try:
-            more, m2 = sample_segments(path, cfg, starts_s=cand) if cand else (np.empty(0), {})
+            more, m2 = sample_segments(path, cfg, starts_s=cand, region=region) if cand else (np.empty(0), {})
         except ShortVideo:  # no further full segment fits in the clip
             more, m2 = np.empty(0), {}
         for s, st in zip(more, m2.get("segment_starts_s", [])):
@@ -470,19 +486,21 @@ def _file_hash(path: Path) -> str:
 _GUARD_KEYS = ("graphics_block_std", "graphics_flat_frac", "graphics_max_motion", "graphics_search_s")
 
 
-def cache_key(path: Path, config: dict, guard: bool = False) -> str:
+def cache_key(path: Path, config: dict, guard: bool = False, region: tuple | None = None) -> str:
     cfg = merged_config(config)
     h = hashlib.sha256(_file_hash(path).encode())
     params = {k: cfg[k] for k in ("backbone", "img_size", "sample_fps", "n_frames", "max_segments")}
     if guard:  # guarded segments differ, so they get their own entries (unguarded keys unchanged)
         params.update(guard=True, **{k: cfg[k] for k in _GUARD_KEYS})
+    if region is not None:
+        params["region"] = [round(float(v)) for v in region]
     h.update(json.dumps(params, sort_keys=True).encode())
     return h.hexdigest()[:20]
 
 
 def segment_embeddings(
     path: str | Path, embedder: Embedder, config: dict | None = None, use_cache: bool = True,
-    guard: bool = False,
+    guard: bool = False, region: tuple | None = None,
 ) -> tuple[np.ndarray, dict]:
     """(S, N, D) embeddings for a video, cached by content + parameters.
     ``guard`` skips title cards (``guarded_segments``; inference only, the
@@ -491,11 +509,11 @@ def segment_embeddings(
     p = Path(path)
     cache_file = None
     if use_cache and cfg.get("cache_dir"):
-        cache_file = Path(cfg["cache_dir"]) / f"{cache_key(p, cfg, guard)}.npz"
+        cache_file = Path(cfg["cache_dir"]) / f"{cache_key(p, cfg, guard, region)}.npz"
         if cache_file.is_file():
             with np.load(cache_file, allow_pickle=False) as z:
                 return z["emb"], json.loads(str(z["meta"]))
-    frames, meta = guarded_segments(p, cfg) if guard else sample_segments(p, cfg)
+    frames, meta = guarded_segments(p, cfg, region=region) if guard else sample_segments(p, cfg, region=region)
     s, n = frames.shape[:2]
     emb = embedder.embed(frames.reshape(s * n, *frames.shape[2:])).reshape(s, n, -1)
     if cache_file is not None:
@@ -559,31 +577,45 @@ def load_bundle(path: str | Path) -> dict:
     return bundle
 
 
-def normalize_for_inference(path: Path, norm: dict | None, workdir: Path) -> tuple[Path, list[str]]:
+def normalize_for_inference(path: Path, norm: dict | None, workdir: Path, region: tuple | None = None,
+                            max_seconds: float = 120.0) -> tuple[Path, list[str], bool]:
     """Re-encode a clip the way training clips were (configs/p5_aigen.yaml
-    `normalize`), so the detector sees the same format it was fitted on.
-    Falls back to the clip as-is, with a warning, when ffmpeg is missing or
-    fails. Local process only; no network."""
+    `normalize`), so the detector sees the same format it was fitted on;
+    ``region`` (x0, y0, x1, y1 in source pixels, the extension's video
+    element) is cropped in the same pass. Falls back to the clip as-is, with a
+    warning, when ffmpeg is missing or fails. Returns (path, warnings,
+    region_applied). Local process only; no network."""
     import shutil
     import subprocess
 
     if not norm:
-        return path, []
+        return path, [], False
     if shutil.which("ffmpeg") is None:
-        return path, ["W_NO_FFMPEG: analysed as-is; install ffmpeg for training-format input"]
+        return path, ["W_NO_FFMPEG: analysed as-is; install ffmpeg for training-format input"], False
     s = int(norm["short_side"])
     out = workdir / "normalized.mp4"
+    crop = ""
+    if region is not None:
+        import cv2
+
+        from .ingest import clip_region
+
+        cap = cv2.VideoCapture(str(path))
+        w, h = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+        cap.release()
+        x0, y0, x1, y1 = clip_region(region, w, h)
+        crop = f"crop={x1 - x0}:{y1 - y0}:{x0}:{y0},"
     cmd = [
-        "ffmpeg", "-nostdin", "-loglevel", "error", "-y", "-i", str(path), "-t", "120",
-        "-vf", f"scale='if(gt(iw,ih),-2,{s})':'if(gt(iw,ih),{s},-2)'",
+        "ffmpeg", "-nostdin", "-loglevel", "error", "-y", "-i", str(path), "-t", f"{max_seconds:g}",
+        "-vf", f"{crop}scale='if(gt(iw,ih),-2,{s})':'if(gt(iw,ih),{s},-2)'",
         "-c:v", "libx264", "-crf", str(norm["crf"]), "-preset", str(norm["preset"]),
         "-pix_fmt", "yuv420p", "-an", str(out),
     ]
     try:
         subprocess.run(cmd, check=True, timeout=600, capture_output=True)
-        return out, []
+        return out, [], region is not None
     except (subprocess.SubprocessError, OSError) as exc:
-        return path, [f"W_NORMALIZE_FAILED: analysed as-is ({type(exc).__name__})"]
+        return path, [f"W_NORMALIZE_FAILED: analysed as-is ({type(exc).__name__})"], False
 
 
 def segment_scores(seg_emb: np.ndarray, bundle: dict) -> np.ndarray:
@@ -613,12 +645,15 @@ def analyze(
     use_cache: bool = False,
     normalize: bool = True,
     progress: Callable[[float, str], None] | None = None,
+    region: tuple | None = None,
 ) -> AIGenResult:
     """Score one video with a trained bundle (see scripts/train_aigen.py).
 
     Never raises for bad input: unreadable or too-short clips come back as
     label "unknown" with the error code in ``warnings``. ``progress(frac,
-    stage)`` reports the stage reached (the app's progress bar).
+    stage)`` reports the stage reached (the app's progress bar). ``region``
+    (x0, y0, x1, y1, source pixels) analyses only that part of the frame
+    (the browser extension's video element, docs/13 §3.4).
     """
     import tempfile
 
@@ -633,14 +668,17 @@ def analyze(
     warnings: list[str] = []
     with tempfile.TemporaryDirectory(prefix="trubeat_aigen_") as tmp:
         src = Path(path)
-        if normalize and src.is_file():
-            report(0.0, "re-encoding the clip")
-            src, w = normalize_for_inference(src, cfg.get("normalize"), Path(tmp))
-            warnings += w
-        report(0.55, "scoring frames with the vision model")
+        pending = region            # cropped by ffmpeg when it re-encodes, else while decoding
         try:
+            if normalize and src.is_file():
+                report(0.0, "re-encoding the clip")
+                src, w, done = normalize_for_inference(src, cfg.get("normalize"), Path(tmp), region=region,
+                                                       max_seconds=float(cfg["max_seconds"]))
+                warnings += w
+                pending = None if done else region
+            report(0.55, "scoring frames with the vision model")
             seg_emb, meta = segment_embeddings(src, embedder, cfg, use_cache=use_cache,
-                                               guard=bool(cfg.get("graphics_guard")))
+                                               guard=bool(cfg.get("graphics_guard")), region=pending)
         except (UnreadableVideo, ShortVideo, GraphicsOnly) as exc:
             return AIGenResult(None, None, thr, "unknown", feature_set=bundle["feature_set"],
                                warnings=warnings + [f"{exc.code}: {exc}"])

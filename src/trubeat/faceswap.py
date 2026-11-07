@@ -120,21 +120,27 @@ def target_indices(n_total: int, fps: float, n: int, max_seconds: float) -> list
     return sorted({_ri(x) for x in np.linspace(0, last, n)})
 
 
-def sample_frames(path: str | Path, n: int, max_seconds: float) -> SampledFrames:
+def sample_frames(path: str | Path, n: int, max_seconds: float, region: tuple | None = None) -> SampledFrames:
     """Decode only the ``n`` target frames (native resolution, RGB).
 
     Non-target frames are grabbed, not converted, so memory stays at ``n``
-    frames whatever the clip length. Raises UnreadableVideo.
+    frames whatever the clip length. ``region`` (x0, y0, x1, y1, source
+    pixels; the extension's video element) crops each kept frame, so face
+    boxes refer to the cropped frame. Raises UnreadableVideo.
     """
     import cv2
 
+    from .ingest import clip_region
+
     p = Path(path)
     if not p.is_file():
-        raise UnreadableVideo(f"not a file: {path}")
+        raise UnreadableVideo(f"not a file: {p.name}")
     cap = cv2.VideoCapture(str(p))
     try:
         if not cap.isOpened():
-            raise UnreadableVideo(f"cannot open video: {path}")
+            raise UnreadableVideo(f"cannot open video: {p.name}")
+        box = (clip_region(region, int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0),
+                           int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)) if region is not None else None)
         fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
         n_total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
         if n_total <= 0:
@@ -157,10 +163,10 @@ def sample_frames(path: str | Path, n: int, max_seconds: float) -> SampledFrames
             cap.release()
             cap = cv2.VideoCapture(str(p))
             if not cap.isOpened():
-                raise UnreadableVideo(f"cannot reopen video: {path}")
+                raise UnreadableVideo(f"cannot reopen video: {p.name}")
         want = target_indices(n_total, fps, n, max_seconds)
         if not want:
-            raise UnreadableVideo(f"no decodable frames: {path}")
+            raise UnreadableVideo(f"no decodable frames: {p.name}")
         wanted, frames, index, times = set(want), [], [], []
         width = height = 0
         for i in range(want[-1] + 1):
@@ -170,6 +176,8 @@ def sample_frames(path: str | Path, n: int, max_seconds: float) -> SampledFrames
                 ok, bgr = cap.retrieve()
                 if not ok:
                     continue
+                if box is not None:
+                    bgr = bgr[box[1]:box[3], box[0]:box[2]]
                 height, width = bgr.shape[:2]
                 frames.append(np.ascontiguousarray(bgr[:, :, ::-1]))
                 index.append(i)
@@ -177,7 +185,7 @@ def sample_frames(path: str | Path, n: int, max_seconds: float) -> SampledFrames
     finally:
         cap.release()
     if not frames:
-        raise UnreadableVideo(f"no decodable frames: {path}")
+        raise UnreadableVideo(f"no decodable frames: {p.name}")
     duration = n_total / fps if fps > 0 else 0.0
     return SampledFrames(frames, index, times, fps, n_total, duration, width, height)
 
@@ -554,7 +562,8 @@ class FaceSwapResult:
 
 
 def analyze(path: str | Path, bundle: dict, embedder: FaceEmbedder | CNNScorer | None = None,
-            finder: FaceFinder | None = None, progress: ProgressFn | None = None) -> FaceSwapResult:
+            finder: FaceFinder | None = None, progress: ProgressFn | None = None,
+            region: tuple | None = None) -> FaceSwapResult:
     """Score one clip with a trained bundle. Never raises for bad input:
     unreadable clips and clips without enough faces come back as
     ``unknown`` / ``no_face`` with the reason in ``warnings``."""
@@ -567,7 +576,7 @@ def analyze(path: str | Path, bundle: dict, embedder: FaceEmbedder | CNNScorer |
 
     report(0.0, "decoding sampled frames")
     try:
-        sampled = sample_frames(path, int(cfg["n_frames"]), float(cfg["max_seconds"]))
+        sampled = sample_frames(path, int(cfg["n_frames"]), float(cfg["max_seconds"]), region=region)
     except UnreadableVideo as exc:
         return FaceSwapResult(None, thr, "unknown", warnings=[f"{exc.code}: {exc}"])
     if sampled.fps > 0 and sampled.duration_s < float(cfg["min_seconds"]):

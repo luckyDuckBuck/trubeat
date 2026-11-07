@@ -137,6 +137,14 @@ def open_video(path: str, frame_height: int | None = DEFAULT_FRAME_HEIGHT) -> Vi
     # frame_height caps the decoded frame height (aspect preserved, never
     # upscaled); None keeps native resolution.
     # 2026-11-06 (additive): optional progress(done, total) every 24 frames.
+    # 2026-11-07 (docs/13 A-01, A-02, A-17): frame_height now caps the SHORT side (long side
+    #   <= 16/9 of it), so vertical video keeps 480 px of width; additive max_seconds=None (stop
+    #   decoding there, by timestamp) and region=None ((x0, y0, x1, y1) source pixels, cropped
+    #   first); decoding stops at MAX_DECODED_BYTES instead of refusing; VideoStream gains
+    #   truncated and full_duration_s. The no-frame-count path (MediaRecorder WebM) now
+    #   downscales and counts bytes like the main path.
+def probe(path, max_seconds=None) -> Probe   # 2026-11-07: fps, n_frames, duration_s, width, height,
+    # from_metadata; frame timestamps when the metadata cannot be trusted (WebM: -2**63 frames)
 
 # face.py
 def track_landmarks(frames: np.ndarray, fps: float) -> tuple[np.ndarray, np.ndarray]
@@ -185,6 +193,20 @@ def analyze(path, bundle, embedder=None) -> AIGenResult           # p_ai, score,
 # provenance.py (added 2026-11-01, docs/11 D2; additive, offline C2PA read)
 def read_provenance(path) -> ProvenanceResult  # has_c2pa, ai_declared, source_types, generator
 
+# aigen.py (2026-11-07, docs/13 A-06 + §3.4; additive): analyze(..., region=None) crops the
+#   region inside the ffmpeg normalisation (or while decoding without ffmpeg);
+#   normalize_for_inference(path, norm, workdir, region=None, max_seconds=120) returns
+#   (path, warnings, region_applied); the no-ffmpeg decode stops at config max_seconds (120 s).
+# facefind.py (2026-11-07, docs/13 §3.1): TwoPassFinder(config).largest_face(rgb) -> (cx, cy, side) | None
+#   (the round-3 pass first, YuNet + Landmarker-on-a-crop only when it finds nothing); last_seen,
+#   last_source; resolve_yunet_path()
+# app.py (2026-11-07, docs/13 §3.5): analyze_video(..., region=None); api_payload(a) -> dict (the
+#   extension's JSON, keys app.API_PAYLOAD_KEYS, adds pulse_measurable and warnings);
+#   parse_region(text); a second API endpoint analyze_video_region(video, region_json);
+#   `trubeat serve --host` (default 127.0.0.1); uploads swept after an hour, the extension's
+#   capture deleted once analysed; Content Credentials decide only when their signature
+#   validates (Valid/Trusted), otherwise the claim is stated in the detail and the other layers
+#   decide.
 # aigen.py (2026-11-06, docs/12 item A; additive): the title-card guard
 def sample_segments(path, config=None, starts_s=None) -> tuple[np.ndarray, dict]  # explicit starts
 def is_graphic(segment, config=None) -> bool          # mostly flat 8x8 blocks
@@ -193,11 +215,13 @@ def segment_embeddings(path, embedder, config=None, use_cache=True, guard=False)
     # cached under its own key (2026-11-06 review: analyze no longer bypasses the cache)
 
 # faceswap.py (added 2026-11-06, docs/12; additive, face-swap detector)
-def sample_frames(path, n, max_seconds) -> SampledFrames   # n frames, native resolution
+def sample_frames(path, n, max_seconds, region=None) -> SampledFrames   # n frames, native resolution
+    # 2026-11-07: region crops each kept frame (additive); the finder is chosen by config["finder"]:
+    # "landmarker" (round 3; bundles without the key) or "twopass" (facefind.TwoPassFinder, docs/13 §3.1)
 def face_crops(sampled, finder, config=None, progress=None) -> list[FaceCrop]
 class FaceEmbedder: def embed(crops) -> np.ndarray         # stage 1: frozen backbone
 class CNNScorer: def score(crops) -> np.ndarray            # stage 2: fine-tuned CNN logits
-def analyze(path, bundle, embedder=None, finder=None, progress=None) -> FaceSwapResult
+def analyze(path, bundle, embedder=None, finder=None, progress=None, region=None) -> FaceSwapResult
     # score, threshold, label (swap | no_swap | no_face | unknown), real_percentile,
     # n_faces, top_crop / top_time_s (the most suspicious face), warnings;
     # clips under min_seconds (2 s) -> unknown + E_SHORT_VIDEO (docs/12 §5 B)
@@ -250,10 +274,10 @@ trubeat/
 | `E_UNREADABLE` | file won't decode | abort with message |
 | `E_LOW_FPS` | fps missing or < 15 | abort — bpm math is invalid |
 | `E_SHORT_VIDEO` | < 10 s usable | abort — frequency resolution meaningless |
-| `E_NO_FACE` | face found in < 70% of frames | abort |
+| `E_NO_FACE` | no frame has a face (`model.predict_video`) | abort |
 | `W_UNSTABLE_TRACK` | intermittent tracking | continue, flag in output |
 | `E_MODEL_MISSING` | AI-video backbone weights not in the local cache | that layer is skipped with the message; `trubeat fetch-models` downloads them (the only network step, user-initiated) |
-| `W_LOW_CONFIDENCE` | weak spectral peak / low vote margin | continue, flag in output |
+| `W_LOW_CONFIDENCE` | reserved; not emitted by any module (2026-11-07 audit) | — |
 
 Warnings added with the fused verdict (docs/11). Each is shown in the app and extension
 evidence and never changes a verdict by itself:
@@ -267,7 +291,8 @@ evidence and never changes a verdict by itself:
 | `W_C2PA_UNVERIFIED` | Content Credentials present but their signature state is not Valid/Trusted |
 | `W_NO_C2PA_LIB` / `W_C2PA_READ` | provenance reader missing / failed; treated as "no credentials" |
 | `W_PULSE_SKIPPED` / `W_PULSE_FAILED` / `W_FACESWAP_FAILED` | pulse or face-swap layer did not run (e.g. `E_SHORT_VIDEO` under 10 s) or raised |
-| `W_TRUNCATED` | analysis capped at the first 120 s |
+| `W_UNSTABLE_TRACK` | the pulse layer tracked the face in fewer than 70% of frames; its face-swap check does not run (emitted by the app since 2026-11-07) |
+| `W_TRUNCATED` | the pulse layer analysed only the first part of the clip (120 s, or less when the decoded-frame budget ran out); says how much |
 | `W_GRAPHICS_SKIPPED` | the AI-video layer skipped title-card / graphic segments and scored a later one (docs/12 item A) |
 | `E_GRAPHICS_ONLY` | every candidate segment in the first 30 s was a graphic; the AI-video layer did not score |
 | `W_FEW_FACES` | the face-swap detector found a face in fewer than 4 of its 16 sampled frames; it does not decide |

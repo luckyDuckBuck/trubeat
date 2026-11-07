@@ -229,6 +229,8 @@ def main() -> None:
 
     s = sub.add_parser("serve", help="run the TrueBeat web app (Gradio)")
     s.add_argument("--port", type=int, default=7860)
+    s.add_argument("--host", default="127.0.0.1",
+                   help="address to listen on (default: this machine only)")
     s.add_argument("--share", action="store_true",
                    help="temporary public Gradio link (uploads leave this machine)")
     s.add_argument("--config", default=None)
@@ -241,7 +243,7 @@ def main() -> None:
         if args.cmd == "serve":
             from . import app as appmod
 
-            argv = ["--port", str(args.port)]
+            argv = ["--port", str(args.port), "--host", args.host]
             if args.share:
                 argv.append("--share")
             if args.config:

@@ -111,7 +111,7 @@ def main() -> None:
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:  # the app's re-encode first, as at inference
-            src, _ = aigen.normalize_for_inference(Path(args.clip), cfg.get("normalize"), Path(tmp))
+            src, _, _ = aigen.normalize_for_inference(Path(args.clip), cfg.get("normalize"), Path(tmp))
             segs, meta = aigen.sample_segments(src, dict(cfg, max_segments=30))
         flags = [aigen.is_graphic(s, cfg) for s in segs]
         L += ["", f"## `{Path(args.clip).name}`", "",
