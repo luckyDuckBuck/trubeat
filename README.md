@@ -178,13 +178,15 @@ not detect face-swaps. The round-2 audit and the next steps are in
 face-crop detector (frozen CLIP ViT-B/16 + logistic regression, chosen by
 leave-one-manipulation-out AUC) was trained in Colab on FaceForensics++ c23
 train + val. On the held-out FaceForensics++ test set its AUC is 0.97
-(Deepfakes), 0.95 (FaceSwap) and 0.93 (FaceShifter) with 1/140 real clips
-flagged; on DeepFakeDetection, AUC 0.88 with 3/150 reals flagged. But on
+(Deepfakes), 0.95 (FaceSwap) and 0.93 (FaceShifter) with 1 of 134 judged
+real clips flagged; on DeepFakeDetection, AUC 0.88 with 3 of 67 judged reals
+flagged (rates over clips where a face was found; docs/12 §9 correction). But on
 real non-FaceForensics clips with a face (GenBuster-Bench + AIGVDBench) it
 flagged **115/300 = 38%** [33, 44], against a 3% limit fixed before the run,
 so by that rule it ships as evidence only and never decides. Re-compression
 alone sets it off: after a WhatsApp-like re-encode (640 px, CRF 30) it
-flags 45/140 real FaceForensics++ test clips, against 1/140 before. It does
+flags 45 of 133 judged real FaceForensics++ test clips, against 1 of 134
+before. It does
 not flag the RepresentUs face-swap ad that started this round. The model is
 trained on FaceForensics++, whose terms allow non-commercial research use
 only; that applies to `src/trubeat/models/faceswap.joblib`.

@@ -1,0 +1,88 @@
+# Face-swap detector v2 (docs/13 §3.2-3.3, §6.2). Read by
+# scripts/train_faceswap_v2.py; the inference keys are copied into the
+# bundle's config, which the app uses (faceswap.merged_config).
+
+# --- inference keys (same meaning as configs/p6_faceswap.yaml) ---
+n_frames: 16
+max_seconds: 120.0        # the app samples within the first 120 s
+min_seconds: 2.0
+min_faces: 4
+max_faces: 3
+crop_scale: 1.3
+crop_size: 224
+min_face_px: 40
+finder: twopass           # docs/13 §6.1 (adopted only if reports/facefind.md says so)
+torch_threads: 4
+target_fpr: 0.03
+# two-pass finder (src/trubeat/facefind.py)
+detect_max_side: 1280
+detect_score: 0.6
+detect_nms: 0.3
+landmark_margin: 2.0
+landmark_min_crop: 256
+landmark_max_crop: 512
+lm_detection_confidence: 0.5
+lm_presence_confidence: 0.5
+
+# --- training only ---
+# Every variant of a video (and the original) is sampled within the same
+# first window_s seconds, so a variant costs one short re-encode; at
+# inference the app still samples over the first max_seconds.
+window_s: 20.0
+# Processing variants (docs/13 §3.2). c40 is FaceForensics++'s own c40
+# file of the same video; the others are re-encodes of the c23 file.
+variants:
+  ffpp: [v0, c40, v1, v2, v3, v4]
+  dfd: [v0, c40, v1, v2, v3, v4]
+  df40: [v0]
+  cdf2: [v0]
+  uadfv: [v0]
+variant_specs:
+  v1: {width: 640, codec: libx264, crf: 30, preset: veryfast}          # WhatsApp-like (round-3 protocol)
+  v2: {width: 1024, codec: hevc, crf: 28}                              # stock-clip look (hevc_nvenc, else libx265)
+  v3: {short_side: 720, codec: libvpx-vp9, bitrate: 2500k}            # the extension's tab capture
+  v4: {down_short_side: 360, codec: libx264, crf: 23, preset: veryfast}  # upscaled re-upload
+ffmpeg_timeout_s: 300
+# Crop-level augmentation (training rows of the v0 crops only), K copies per clip.
+crop_aug:
+  k: 2
+  jpeg_quality: [40, 90]
+  rescale: [0.3, 0.9]
+  blur_sigma_max: 1.2
+  blur_p: 0.5
+  brightness: 0.10
+  contrast: 0.10
+# Stage-2 crops (JPEG q95) for the v0 videos of these datasets, in case §6.3 sends us to stage 2.
+stage2_crop_size: 380
+stage2_datasets: [ffpp, dfd]
+
+# Selection (docs/13 §6.2, with the 2026-11-07 two-stage revision).
+candidates:
+  backbones: [vit_base_patch16_clip_224.openai, vit_large_patch14_clip_224.openai]
+  features: [cls, cls+patch]
+  C: [0.01, 0.1, 1.0]
+  training_sets: [base, video, video+crop]   # base = v0 + c40; video = + v1-v4; video+crop = + crop augmentation
+cost_order:              # cheaper first, for the 0.01 tie rule
+  backbones: [vit_base_patch16_clip_224.openai, vit_large_patch14_clip_224.openai]
+  features: [cls, cls+patch]
+  training_sets: [base, video, video+crop]
+selection:
+  repeats: 3             # stage A: repeated group folds
+  folds: 5
+  tolerance: 0.01        # LOMO macro AUC within this of the best counts as a tie
+  stage_b_keep: 4        # representations carried into stage B
+  lopso_max_fpr: 0.06
+  sources: [v0, c40, v1, v2, v3, v4]
+  seeds: [7, 11, 13]
+  n_jobs: 4
+
+# DF40 (docs/13 §3.2): face-swap methods trained on (FF++ train/val identities),
+# the methods scored on FF++ test identities (gate 1b), and the report-only sets.
+df40:
+  train_methods: [blendface, e4s, facedancer, faceswap, fsgan, inswap, mobileswap, simswap]
+  train_cap: 300         # videos per method from FF++ train+val pairs
+  gate_methods: [blendface, facedancer, faceswap, inswap, mobileswap, simswap, uniface]   # test/<m>.zip ff/
+  reenact_methods: [fomm, facevid2vid, pirender, wav2lip]                                 # report only
+  cdf_methods: [blendface, simswap, uniface, inswap, fsgan, mobileswap, facedancer, faceswap]
+  cdf_cap: 150
+seed: 7

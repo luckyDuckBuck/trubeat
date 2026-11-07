@@ -297,6 +297,24 @@ rates go up (Deepfakes 68% → 81%) only because real clips are flagged
 too. A re-shared clip, such as a WhatsApp forward, is exactly the case
 this round started from; on such clips the detector's flag means little.
 
+**Correction (2026-11-07, docs/13 audit B-01).** The false-alarm and
+catch rates above counted clips the detector never judged (a face in fewer
+than 4 of 16 frames) as "not flagged", while gate 4 counted judged clips
+only. Over judged clips, as gate 4 does (Wilson 95%):
+
+| set | as reported above | over judged clips |
+|---|---|---|
+| FF++ test reals flagged (gate 2) | 1/140 = 0.7% | 1/134 = 0.7% [0.1, 4.1] |
+| DeepFakeDetection reals flagged (gate 3) | 3/150 = 2.0% | **3/67 = 4.5% [1.5, 12.4]** |
+| caught: Deepfakes / FaceSwap / FaceShifter | 79% / 69% / 52% | 83% / 72% / 54% |
+| caught: Face2Face / NeuralTextures | 54% / 27% | 56% / 28% |
+| caught: DeepFakeDetection fakes | 77/300 = 25.7% | 77/139 = 55.4% |
+| laptop, FF++ reals after the WhatsApp-like re-encode | 45/140 = 32.1% | 45/133 = 33.8% [26.3, 42.2] |
+
+Every gate decision is unchanged (gate 2: 1/134 ≤ 5/140; gate 3: 4.5% ≤ 8%;
+AUCs were already computed over judged clips). Round 4 (docs/13) reports
+every rate as "k / n judged (of N)".
+
 **Next steps** (not started; each needs a new plan with its rule fixed
 first): train on real faces from more sources than FaceForensics++, with
 resampling and re-compression augmentation, and test on a real set the
