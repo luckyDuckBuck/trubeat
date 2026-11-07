@@ -1,7 +1,10 @@
 # 13 — Round 4: a face-swap detector that survives processing, finds small faces, and a repaired capture path; plus the audit fixes (2026-11-07)
 
-**Status: DRAFT, awaiting human approval.** Written for hand-off to the
-executing agent. Nothing in §6 (decision rules) may change after a result
+**Status: approved to execute (human, 2026-11-07: "approve the plan";
+"dont start implementing yet … only refine plan rightnow": implementation
+starts in a new session).** Refined the same day with what arrived: the
+Kaggle API token, the DF40 and Celeb-DF v2 download links, and Pexels'
+unavailability. Written for hand-off to the executing agent. Nothing in §6 (decision rules) may change after a result
 exists; a revision is recorded the way docs/12 §6 records its title-card
 revision (dated, before the re-check).
 
@@ -56,11 +59,14 @@ repo README, "When the tool changes"); every number shown names its dataset
 and split; never fake a gate; prefer Kaggle over Colab for cloud runs (Colab
 flagged the notebook's deepfake keywords, and its free session ended ~7 h in).
 
-**Human gates in this round** (each a single action; §9 lists them with
-exact steps): Kaggle API token and phone verification; the DF40 download
-form; the Celeb-DF v2 form; optionally a Pexels API key; approving this plan;
-reviewing the result report; the extension release command if the agent's
-permission check blocks `gh release create`.
+**Human gates in this round** (§9). Done on 2026-11-07: the plan approved;
+the Kaggle API token saved at `~/.kaggle/access_token` (local, never
+committed); the DF40 and Celeb-DF v2 links received after their forms and
+recorded in `runs/faceswap/round4_links.md` (gitignored). Pexels is
+unavailable (key issuance paused). Left: reviewing the result report; the
+extension release command if the agent's permission check blocks
+`gh release create`; Kaggle phone verification only if the first kernel push
+with internet is refused.
 
 ---
 
@@ -149,8 +155,9 @@ change what the tool does or claims:
 
 **How the cloud is driven.** Not by the human clicking "Run all": the
 agent drives Kaggle from the laptop with the official CLI
-(`pip install kaggle`; token at `~/.kaggle/kaggle.json`, created once by the
-human: kaggle.com → Settings → "Create Legacy API Key"). A notebook is a
+(`uv tool install kaggle --with six`; the user's API token, the new `KGAT_`
+format, is at `~/.kaggle/access_token`, which the CLI reads; the Kaggle
+username comes from `kaggle kernels list --mine` or the account page). A notebook is a
 folder with `kernel-metadata.json` (`id` = `<user>/<slug>`, `code_file`,
 `kernel_type: notebook`, `language: python`, `is_private: true`,
 `enable_gpu`, `enable_internet`, `machine_shape: NvidiaTeslaT4`,
@@ -170,7 +177,7 @@ never downloads anything by hand; the agent pulls the small results
 | code, tests, face finder, extension, app, docs | laptop | agent |
 | frozen gate-4 list, laptop re-checks, RepresentUs and `user_eval` scoring, ship | laptop | agent |
 | download FF++ (c23 + c40), DeepFakeDetection, DF40 and Celeb-DF v2 if granted; faces, variants, crops, embeddings, selection, held-out tables; stage 2 if triggered | Kaggle, API-driven | agent (token: human) |
-| forms, token, phone verification, optional Pexels key, plan approval, result review, extension release command if blocked | — | human |
+| result review; the extension release command if blocked; phone verification only if asked (token, forms and approval: done 2026-11-07) | — | human |
 
 **Fallback** if Kaggle GPUs are unavailable for days: CPU-only Kaggle
 kernels for faces and variants (no quota), and either a Kaggle GPU kernel
@@ -244,33 +251,35 @@ video variants + crop augmentation" (§6.2).
 |---|---|---|---|---|
 | FaceForensics++ c23 and c40: original, Deepfakes, Face2Face, FaceSwap, NeuralTextures, FaceShifter | train / val / test by the official identity-disjoint split; c40 twins share split and group | 6 × 1000 videos per quality (~11 GB c23, ~3 GB c40 estimate) | existing access (terms accepted); `train_faceswap.py download` with `--compression c40` added | FaceForensics ToS: non-commercial research and educational use only; no redistribution of the data; employer bound (kaldir.vc.in.tum.de/faceforensics_tos.pdf) |
 | DeepFakeDetection (Google/Jigsaw actors) | external (cross-dataset) only, as in round 3 | 150 real + 300 fake, c23 (+ the same files in c40) | same download | same ToS |
-| **DF40**, face-swapping subset on FF++ identities: FSGAN, FaceSwap, SimSwap, InSwapper, BlendFace, UniFace, MobileSwap, e4s, FaceDancer, DeepFaceLab | **training fakes (modern methods)** by the FF++ split of their identities, and the FF++-test identities as held-out methods (gate 1b) | raw videos via the project's Google Drive; cap 300 train+val + 140 test videos per method (~4,400) | **human gate: the Google Form on github.com/YZY-stack/DF40**; the agent then reads the Drive folder, verifies that file names map to FF++ ids, and fails loudly if they do not | CC BY-NC 4.0 → the shipped model is non-commercial, attribution in `NOTICE` |
-| **Celeb-DF v2** | external: cross-dataset gate 3b (fakes vs reals of its official test list, 518 videos) and an outside-real set (590 Celeb-real + 300 YouTube-real) | ~14 GB | **human gate: the form linked from github.com/yuezunli/celeb-deepfakeforensics** (academic-email friction noted in docs/09 §2) | terms in the form; test-only use here |
+| **DF40**, face-swapping subset on FF++ identities: FSGAN, FaceSwap, SimSwap, InSwapper, BlendFace, UniFace, MobileSwap, e4s, FaceDancer, DeepFaceLab | **training fakes (modern methods)** by the FF++ split of their identities, and the FF++-test identities as held-out methods (gate 1b) | raw videos via the project's Google Drive; cap 300 train+val + 140 test videos per method (~4,400) | form done; the Drive folder of the original FS/FR videos is in `runs/faceswap/round4_links.md`; the agent lists it first, verifies that file names map to FF++ ids (the DF40 JSON path files help), and fails loudly if they do not; the pre-processed frame sets are not used (different crop convention). The reenactment (FR) methods are not trained on: up to 4 of them × 140 FF++-test videos are scored and reported like Face2Face | CC BY-NC 4.0 → the shipped model is non-commercial, attribution in `NOTICE` |
+| **Celeb-DF v2** | external: cross-dataset gate 3b (fakes vs reals of its official test list, 518 videos) and an outside-real set (590 Celeb-real + 300 YouTube-real) | ~14 GB | form done; Drive link in `runs/faceswap/round4_links.md`; downloaded inside the Kaggle kernel (`gdown`); if Drive's shared-file quota blocks it, Celeb-DF is processed on the laptop instead (~14 GB, ~3 h CPU; held-out only, so one backbone) | terms accepted in the form; test-only use here |
 | GenBuster-Bench + AIGVDBench reals, the 706 clips processed in round 3 | **gate 4a, frozen**: the identical clip list, never used for training | on the laptop | — | public |
-| Pexels videos with a face (optional) | extra training reals with stock-style processing; a held-out creator subset reported as "stock reals FPR" | ≤ 3,000 clips via the API (200 requests/h); keep only ids below a cutoff the agent verifies predates mainstream AI video, and drop any clip the AI-video detector flags | **human gate (optional): a free API key at pexels.com/api** | Pexels licence: free use and modification, no attribution required; the API guidelines ask for a visible Pexels credit (added to `NOTICE`) |
+| OpenVid-1M clips with a face (optional) | extra training reals with stock-style processing (the GenBuster-real look); a held-out subset reported as "stock reals FPR" | ≤ 3,000 clips chosen from the dataset's CSV (captions naming a person speaking, an interview or a portrait; 4–20 s), fetched one zip member at a time by HTTP range requests (`remotezip`) from the > 50 GB parts on Hugging Face, so no part is downloaded whole; any clip the AI-video detector flags is dropped; grouped by source video id | public, no form; the agent proves the range fetch on 20 clips first, else the round runs without extra reals | CC-BY-4.0; its card says research and non-commercial purposes; attribution in `NOTICE` |
+| UADFV (optional) | report-only external set (49 real + 49 FakeApp swaps, 2018, low resolution) | ~100 videos | link in `round4_links.md` | research use; cited |
 | RepresentUs clip; `data/raw/user_eval/` | reported case by case, never tuned on | laptop only | — | user's own |
 
 Real sources deliberately **not** used for training: GenBuster/AIGVDBench
 reals (they are the gate; and the AI-video detector was trained on
 AIGVDBench reals, so training the FSD on them would leave no real set on the
 laptop unseen by both layers, B-"worth knowing"), Celeb-DF reals (test),
-DFD reals (external). OpenVid-1M (CC-BY-4.0, the likely origin of GenBuster
-reals) is not used because its parts are > 50 GB each; CelebV-HQ needs
-YouTube downloads from a cloud IP (fragile).
+DFD reals (external). CelebV-HQ needs YouTube downloads from a cloud IP
+(fragile); CelebAMask-HQ is images; Pexels' API key issuance is paused
+(2026-11-07). OpenVid-1M is the likely origin of GenBuster's reals, so the
+dedupe below is mandatory whenever it is used.
 
-**Dedupe.** Before training, every Pexels or DF40 clip whose mean CLIP
+**Dedupe.** Before training, every OpenVid or DF40 clip whose mean CLIP
 embedding has cosine ≥ 0.97 with any gate-4a, Celeb-DF or FF++-test clip is
 removed and counted in the report (the `audit_aigen.py` near-duplicate
 method). Content hashes are also compared.
 
 **Manifest schema** (one CSV, built per source then concatenated; validated
 by `check_manifest` extended to cross-dataset groups):
-`video_id, dataset ∈ {ffpp, dfd, df40, cdf2, pexels}, family (original | method name),
+`video_id, dataset ∈ {ffpp, dfd, df40, cdf2, openvid, uadfv}, family (original | method name),
 label ∈ {real, fake}, path, split ∈ {train, val, test, external}, group,
 quality ∈ {c23, c40, raw}, variant ∈ {v0, c40, v1, v2, v3, v4}, source_id
-(FF++ id pair, DF40 method+pair, Celeb-DF id, Pexels user id)`. Group keys:
+(FF++ id pair, DF40 method+pair, Celeb-DF id, OpenVid source video id)`. Group keys:
 FF++ and DF40-on-FF++ = `ffpp:<sorted pair>`; DFD = `dfd:<both actors>`
-(B-17); Celeb-DF = `cdf2:<id>`; Pexels = `pexels:user:<id>`. A variant row
+(B-17); Celeb-DF = `cdf2:<id>`; OpenVid = `openvid:<source video id>`; UADFV = `uadfv:<id>`. A variant row
 inherits split, group and label from its v0 row; `lomo_auc` and
 `oof_scores` group by `group`, so variants of one video never straddle a
 fold. Extra reals carry `family == "original"` (B-"worth knowing").
@@ -411,17 +420,17 @@ groups.
   non-commercial research and educational use only; associates must accept
   the same terms; the employer is bound. The shipped `faceswap.joblib` is
   trained on this data; `README` says so and `NOTICE` will.
-- **DF40:** CC BY-NC 4.0; download links behind a Google Form (the GitHub
-  page lists Drive links for raw face-swap videos, training data (~50 GB,
-  pre-cropped frames, not used here) and test data (~93 GB)). Only the raw
+- **DF40:** CC BY-NC 4.0; form done, links received (Drive folders for the
+  original face-swap and reenactment videos, plus pre-cropped training and
+  test frames, ~93 GB each, not used here). Only the raw
   videos of the ten face-swap methods on FF++ identities are used, capped
   as in §3.2.
-- **Celeb-DF v2:** terms in its form; test-only.
-- **Pexels:** licence permits free use and modification; the API guidelines
-  require a visible Pexels credit for products using the API (the training
-  pipeline is not a product; `NOTICE` credits Pexels anyway). The AI-video
-  filter and the id cutoff guard against AI-generated stock clips labelled
-  real; both are reported.
+- **Celeb-DF v2:** terms accepted in its form; download link received; test-only.
+- **OpenVid-1M** (optional): CC-BY-4.0; its card says research and
+  non-commercial purposes; attribution in `NOTICE`. The AI-video filter guards
+  against generated clips labelled real; the dropped count is reported.
+  **UADFV** (optional): research use; cited. **Pexels:** not used, key
+  issuance paused on 2026-11-07.
 - **YuNet model:** MIT (opencv_zoo). **MediaPipe Face Landmarker:** Apache
   2.0 (already shipped).
 - **The repo** stays MIT for code; `NOTICE` lists the model files and their
@@ -467,7 +476,7 @@ next plan.
   in train+val (the five FF++ methods and every DF40 method), repeated
   GroupKFold 3 × 5; macro mean and sd reported.
 - **LOPSO FPR:** leave-one-processing-source-out: for each source
-  s ∈ {c23, c40, v1, v2, v3, v4, pexels (if present)}, train on the other
+  s ∈ {c23, c40, v1, v2, v3, v4, openvid (if present)}, train on the other
   sources (all classes), set the threshold at 3% on the other sources'
   out-of-fold reals, and record the share of source-s reals above it. The
   statistic is the maximum over sources.
@@ -508,7 +517,9 @@ is recorded). Gate 1, 2 or 2b fails → stage 2 is tried under the same gates;
 if that fails too, nothing ships and the round-3 bundle stays.
 
 **Reported in every case, never gated:** Face2Face and NeuralTextures AUC;
-every held-out AUC and rate under v1–v4 and c40; per-source rates with n;
+the DF40 reenactment methods scored (§3.2); DF40 face-swap methods built on
+Celeb-DF identities against Celeb-DF v2 reals (cross-dataset, modern
+methods); UADFV; every held-out AUC and rate under v1–v4 and c40; per-source rates with n;
 the share of clips with no face per set, before and after the finder
 change; the RepresentUs clip (score, threshold, faces found); the
 `user_eval` set; the dedupe counts; the LOMO sd; latency of the whole
@@ -539,9 +550,9 @@ docs/12 §6 did.
 
 | phase | what | where | done when |
 |---|---|---|---|
-| 0 | this plan committed; the human starts the forms and the Kaggle token (§9) | laptop | approval in writing |
+| 0 | this plan committed and approved (2026-11-07); token and dataset links in hand | laptop | done |
 | 1 | audit fixes that affect measurement and the pipeline (§4, P1 groups); face finder v2 + `check_facefind.py` + report; manifest schema, variants, crop-box reuse, LOMO/LOPSO selection, grouped bootstrap, frozen gate-4 manifest under `data/manifests/faceswap_gate4a.csv` (paths + SHA-256 of the 706 clips); `region` crop through all decode paths; extension v1.3.0 code; app/API fixes; CI leg; NOTICE; docs corrections; tests for each | laptop | full tests green locally and in the new CI leg; `reports/facefind.md` written; smoke run of the whole pipeline (manifest → extract with variants → select → evaluate) on the 603 local clips with the local 1-worker budget |
-| 2 | Kaggle kernels (`notebooks/kaggle/`): K1 download (FF++ c23+c40, DFD; DF40 and Celeb-DF if granted) + faces + variants + crops, checkpointed to `/kaggle/working` (sharded into two CPU kernels if faces take > 8 h); K2 embeddings for both backbones and the crop augmentation (GPU); K3 select + held-out tables + report; K4 stage 2 if triggered. Each kernel halts on the first failure, writes `extract_log.json`, and the agent pulls only reports, manifests and bundles | Kaggle via the CLI | `runs/faceswap/kaggle_<date>/` holds bundle(s), report, manifests; leakage check passes on the returned manifest; the grid is complete |
+| 2 | Kaggle kernels (`notebooks/kaggle/`): K1 download (FF++ c23+c40, DFD, the DF40 face-swap videos and Celeb-DF v2 from the links in hand, OpenVid clips if the range-fetch check passed) + faces + variants + crops, checkpointed to `/kaggle/working` (sharded into two CPU kernels if faces take > 8 h); K2 embeddings for both backbones and the crop augmentation (GPU); K3 select + held-out tables + report; K4 stage 2 if triggered. Each kernel halts on the first failure, writes `extract_log.json`, and the agent pulls only reports, manifests and bundles | Kaggle via the CLI | `runs/faceswap/kaggle_<date>/` holds bundle(s), report, manifests; leakage check passes on the returned manifest; the grid is complete |
 | 3 | gate 4a on the frozen list and 4b/3b if available, the RepresentUs clip, `user_eval`, latency; `ship`; §6.3 outcome recorded in a new §10 here | laptop | `reports/faceswap_gate4a.md` (+ JSON with per-source counts); the bundle's `mode` written by `ship` only |
 | 4 | integration texts (§3.6): app caveat and details from bundle fields, README, docs/04, docs/11 pointer, docs/12 §9 correction note, extension texts, website Updates entry + Docs/Home/RunLocally, `NOTICE` | laptop | every number shown is the measured one; live app run on an FF++ clip, the RepresentUs clip and the user's capture |
 | 5 | review: `/code-review` on the round diff + an independent read of the Kaggle kernels; fix; full tests, CI-style core install, the aigen CI leg, the JS harness | laptop | no open findings |
@@ -563,10 +574,13 @@ method and deleted. GPU quota used: 3–8 of 30 h.
   can synthesise; GenBuster's 67% may also come from content (stock lighting,
   lenses, grading). If so, the result is an evidence-only detector with a
   lower rate and a clearer caveat, and the next plan needs stock-style
-  reals in training (Pexels is the lever; it needs the key).
-- **DF40 and Celeb-DF may not arrive in time.** Gates 1b, 3b and 4b are
-  then not applicable; the caveat says modern methods were not measured;
-  the pipeline is resumable so a later kernel can add them.
+  reals in training (OpenVid by range fetch is the lever if this round did
+  not get to use it).
+- **Google Drive throttles large shared files** ("too many users have
+  viewed or downloaded"). Celeb-DF then moves to the laptop; DF40 is fetched
+  method by method with retries over days; a set that still cannot be
+  fetched makes its gates not applicable, and the caveat says what was not
+  measured. The pipeline is resumable, so a later kernel can add it.
 - **The RepresentUs ad may still be missed.** A professional swap,
   re-compressed by WhatsApp, is the hardest case; it is reported, never
   tuned on.
@@ -586,11 +600,11 @@ method and deleted. GPU quota used: 3–8 of 30 h.
 
 | # | action | unblocks | how |
 |---|---|---|---|
-| 1 | Approve this plan in writing | everything | reply "approved" (or edits) |
-| 2 | Kaggle account ready for API runs | phase 2 | kaggle.com → Settings → Phone verification (needed for internet in kernels); Settings → API → "Create Legacy API Key" → save as `~/.kaggle/kaggle.json` (`chmod 600`); tell the agent your Kaggle username |
-| 3 | DF40 download form | gate 1b, modern methods in training | github.com/YZY-stack/DF40 → "Download DF40" Google Form; paste nothing back, the agent reads the public Drive links listed on that page once the form is done |
-| 4 | Celeb-DF v2 form | gates 3b and 4b | github.com/yuezunli/celeb-deepfakeforensics → "google form"; use your real email and the research-purpose text in docs/09 §2; forward the download link to the agent when it arrives |
-| 5 | (optional) Pexels API key | stock-style training reals | pexels.com/api → request a key (instant) → put it in `~/.config/trubeat/pexels_key` (gitignored path) |
+| 1 | Approve this plan in writing | everything | **done 2026-11-07** ("approve the plan") |
+| 2 | Kaggle API token | phase 2 | **done**: saved at `~/.kaggle/access_token` (local only). Phone verification is needed for internet inside kernels; do it only if the agent reports that the first `kernels push` with `enable_internet` was refused |
+| 3 | DF40 download form | gate 1b, modern methods in training | **done**: links recorded in `runs/faceswap/round4_links.md` |
+| 4 | Celeb-DF v2 form | gates 3b and 4b | **done**: Drive link recorded in the same file |
+| 5 | Pexels API key | — | not available: key issuance is paused (2026-11-07); OpenVid-1M replaces it in §3.2, no action |
 | 6 | Review the result report (§10, written in phase 3) | phases 4–6 | read `reports/faceswap_v2_report.md`; approve the outcome the rules produced |
 | 7 | If the agent's release command is blocked: run the `gh release create extension-v1.3.0 …` line it prints | phase 6 | one command in the terminal |
 
@@ -757,7 +771,7 @@ class TwoPassFinder:
 | step | count | rate | time |
 |---|---|---|---|
 | download FF++ c23 + c40 (10 sets × 1000) + DFD 450 (+450 c40) | ~15 GB | mirror-bound (round 3: ~15 min for 16 GB) | ~0.5 h |
-| faces (two-pass) on v0 + c40 + DFD (+ DF40 ~4,400, Celeb-DF ~1,900 if granted) | ~11k–17k videos | ~1.5 videos/s on 4 vCPU | 2–3 h |
+| faces (two-pass) on v0 + c40 + DFD + DF40 ~4,400 + ~560 DF40 reenactment test videos + Celeb-DF ~1,900 (+ OpenVid ≤ 3,000 if used, UADFV ~100) | ~15k–20k videos | ~1.5 videos/s on 4 vCPU | 2–3 h |
 | variants v1–v4 on FF++ + DFD (train/val/test/external) | 6,450 × 4 re-encodes | ~1.5 s each, 4 in parallel | ~2.7 h |
 | crops (16 per video; 320 px for v0, 224 px for variants) | ~700k | included above | ~11 GB |
 | embeddings, B/16 and L/14, with K = 2 crop augmentations on train+val | ~720k + 2 × 330k crops | T4: ~600/s (B/16), ~150/s (L/14) | ~0.5 h + ~2 h |
