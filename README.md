@@ -18,26 +18,41 @@ videos that fail.
 > the driver's pulse. TrueBeat targets *local spatiotemporal consistency* of
 > blood flow, the signal the 2025 literature says survives. See `docs/`.
 
+Today a verdict comes from Content Credentials and a whole-frame AI-video
+detector first; a weak pulse-consistency check can still flag a possible
+face-swap, while a face-swap detector, the heart rate and the pulse SNR are
+shown as evidence only. Details under *Run the app*.
+
 ## Docs (read first)
 
-The full pre-implementation pack lives in [`docs/`](docs/00_index.md):
-project charter, system requirements, tech stack, architecture, data strategy,
-risk register, implementation plan, acceptance tests, and the
-[agent execution plan](docs/10_agent_execution_plan.md).
+[`docs/`](docs/00_index.md) holds the pre-implementation pack (00–10:
+charter, requirements, tech stack, architecture, data strategy, risks,
+implementation plan, acceptance tests, data access, the first agent
+backlog) and one plan per round since, each with its measured results:
+[docs/11](docs/11_audit_and_improvement_plan.md) (the AI-video detector and
+the fused verdict), [docs/12](docs/12_faceswap_detector_plan.md) (round 3:
+the face-swap detector, evidence only) and
+[docs/13](docs/13_faceswap_v2_and_audit_plan.md) (round 4, in progress).
 
 **Agents start here:** [`AGENTS.md`](AGENTS.md) is the operating manual
-(OpenCode reads it natively), then `docs/09` is the task backlog.
+(OpenCode reads it natively); the current plan is docs/13.
 
-## Quick start (Phase 0)
+## Quick start
 
 ```bash
 uv venv --python 3.11 && source .venv/bin/activate   # 3.12 also fine
-uv pip install -e .
-pytest                    # smoke tests must stay green
+uv pip install -e . pytest   # the package and the test runner
+pytest                       # no dataset needed; tests that need model weights or Node skip
 ```
 
-Then follow the Phase 0 checklist in `docs/07_implementation_plan.md`:
-submit the FF++ / Celeb-DF access forms, download UBFC-rPPG.
+With uv's project workflow, `uv sync` then `uv run pytest` does the same;
+`uv sync` also installs the `dev` group (pytest and the exact ruff CI lints
+with).
+
+That is the core pipeline. The web app and the AI-video and face-swap
+detectors need the extras below. Datasets are needed only to retrain or
+re-measure the detectors (docs/05; access forms are human gates,
+AGENTS.md §9).
 
 ## Run the app (Phase 4a)
 
@@ -45,8 +60,8 @@ A one-click web interface over the *same* pipeline the CLI runs.
 
 ```bash
 uv pip install -e ".[serving]"      # gradio (optional extra)
-# AI-video detector (CPU only; install torch from the CPU index first,
-# or pip pulls ~3 GB of CUDA wheels):
+# AI-video and face-swap detectors (CPU only; install torch from the CPU
+# index first, or pip pulls ~3 GB of CUDA wheels):
 uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 uv pip install -e ".[aigen]"
 trubeat fetch-models                # one-time weight download (~85 MB DINOv2-S + ~570 MB CLIP
@@ -59,10 +74,10 @@ and the verdict says which one decided (docs/11 §4, docs/12):
 
 | check | what it looks at | needs |
 |-------|------------------|-------|
-| **Content Credentials** | a C2PA manifest declaring AI generation (offline read; re-encoding usually strips it) | — |
+| **Content Credentials** | a C2PA manifest declaring AI generation (offline read; re-encoding usually strips it). It decides only when the manifest's signature validates; an unverified claim is shown and the other checks decide | — (the reader, `c2pa-python`, installs with the core package) |
 | **AI-video detector** | the whole frame over time: frozen DINOv2 features, how the clip moves through them (`src/trubeat/aigen.py`) | ≥ 2 s |
 | **face-swap detector** (evidence only) | face crops from 16 frames, frozen CLIP ViT-B/16 features, a linear classifier trained on FaceForensics++ (`src/trubeat/faceswap.py`). Its score is shown but **never decides**: it flagged 38% of real faces from other sources (docs/12 §9) | ≥ 2 s, visible face |
-| **pulse face-swap check** | rPPG consistency across face regions, at a strict threshold (weak: about a quarter of Deepfakes-style swaps, ~2% of real face videos flagged) | ≥ 10 s, visible face |
+| **pulse face-swap check** | rPPG consistency across face regions, at a strict threshold (weak: on FaceForensics++ c23 test clips it catches about a quarter of Deepfakes swaps and flags 3 of 135 reals; docs/11 §9.1, §9.6) | ≥ 10 s, visible face |
 
 | verdict | meaning |
 |---------|---------|
@@ -72,27 +87,28 @@ and the verdict says which one decided (docs/11 §4, docs/12):
 
 Measured accuracy, including false alarms on real videos, is in
 `reports/aigen_detector_v2.md` (written by `scripts/train_aigen.py`) and
-summarised in docs/11. **Score it on your own videos:** put clips you know
+summarised in docs/11 §9. **Score it on your own videos:** put clips you know
 the answer for in `data/raw/user_eval/ai/` and `data/raw/user_eval/real/`,
 then run `python scripts/eval_user_set.py`.
 
 From the command line: `trubeat aigen clip.mp4` (provenance + AI-video
 detector, JSON).
 
-The pulse itself no longer decides anything. With the standard pulse SNR,
-real faces in web-quality video read like noise (docs/11, Phase B result),
-so heart rate and pulse SNR are shown as evidence only.
+The pulse rate itself no longer decides anything. With the standard pulse
+SNR, real faces in web-quality video read like noise (docs/11, Phase B
+result), so heart rate and pulse SNR are shown as evidence only.
 
 **Privacy.** The local app is **fully private** — videos are analysed on this
-machine and never leave it. `--share` publishes a temporary Gradio link:
+machine and never leave it. `trubeat serve` listens on 127.0.0.1 only;
+`--host 0.0.0.0` lets other devices on your network upload to it (it prints
+a warning). Uploads stay in Gradio's temporary folder for about an hour at
+most, and the extension's captures are deleted as soon as their analysis
+returns. `--share` publishes a temporary Gradio link:
 **uploads to a shared instance leave the machine**, so use it for demos only,
 never for real faces.
 
-**Free hosting.** The app is a plain Gradio app, so it also runs on
-**Hugging Face Spaces** (free CPU tier) for a public demo — with the same
-caveat that anything uploaded to a hosted instance leaves your machine.
-Deploy by adding a `spaces.yaml` (or `app.py` entrypoint) that calls
-`trubeat.app.build_demo()`.
+**No hosted version.** Face video is biometric data, so TrueBeat runs where
+the video is: there is no public instance of the app.
 
 **Extension hook.** The analysis is a pure function, separate from the UI:
 
@@ -101,9 +117,9 @@ from trubeat.app import analyze_video
 analysis = analyze_video("clip.mp4")   # -> PulseAnalysis (verdict + evidence)
 ```
 
-`analyze_video` is what the UI calls and what a future browser extension
-should call — Gradio's built-in API already exposes the same function over
-HTTP, so an extension can POST a video without a second implementation.
+`analyze_video` is what the UI calls, and the browser extension below calls
+the same function through Gradio's built-in API (`app.api_payload` builds
+its JSON), so there is no second implementation.
 
 ## Browser extension (Phase 4b)
 
@@ -128,8 +144,8 @@ storage, no network traffic to anything but the backend URL you set.
 
 ## Website
 
-The website (marketing pages, documentation, research summary and the
-"try it online" demo page) lives in its own repo,
+The website (marketing pages, documentation, research summary, a
+run-it-locally guide and an Updates log) lives in its own repo,
 [tripathiayushman/trubeat-website](https://github.com/tripathiayushman/trubeat-website)
 and is served at <https://trubeat.vercel.app>. Nothing about the tool
 changed with the split: this repo is the product; the website is its
@@ -138,11 +154,19 @@ front door.
 ## Layout
 
 ```
-src/trubeat/   # one module per pipeline stage (interfaces: docs/04 §4)
-configs/       # p1_hr / p2_detector / p3_cnn — every run is config-driven
+src/trubeat/   # one module per pipeline stage (interfaces: docs/04 §4);
+               # models/ holds the shipped models (their terms: NOTICE)
+configs/       # every run is config-driven: p1_hr* (heart rate), p2_detector
+               # (pulse check), p3_cnn (Phase 3, not pursued), p5_aigen
+               # (AI-video detector), p6_faceswap / p7_faceswap_v2 (face-swap
+               # detector, rounds 3 and 4)
+scripts/       # training, evaluation and the report writers
+notebooks/     # cloud training: Colab (round 3), Kaggle kernels (round 4)
+extension/     # the Chrome extension
 data/          # DVC-tracked; raw faces NEVER committed (see .gitignore)
-docs/          # the full pre-implementation pack (00–09)
-tests/         # smoke + golden-set regression + synthetic-signal property tests
+docs/          # the pre-implementation pack (00–10) and one plan per round (11–13)
+tests/         # unit, synthetic-signal property and integration tests;
+               # tests/js for the extension
 third_party/   # reference clones only (rPPG-Toolbox) — never dependencies
 ```
 
@@ -189,16 +213,33 @@ flags 45 of 133 judged real FaceForensics++ test clips, against 1 of 134
 before. It does
 not flag the RepresentUs face-swap ad that started this round. The model is
 trained on FaceForensics++, whose terms allow non-commercial research use
-only; that applies to `src/trubeat/models/faceswap.joblib`.
+only; that applies to `src/trubeat/models/faceswap.joblib` (see NOTICE).
 
-Human gates (env, dataset forms/downloads, ROI glance, gate reviews) are
-collected in `reports/HUMAN_GATES.md`.
+**Round 4 (docs/13), in progress.** Done so far: the audit fixes to decoding
+and the app (local-only by default; Content Credentials decide only when
+their signature validates), the extension's capture (v1.3.0: the tab at
+its full resolution, up to 1920×1080, and only the playing video's area is
+analysed when it stays put; not released yet), and a two-pass face finder
+(YuNet, then the Face Landmarker on a crop) that finds faces the round-3
+finder missed (`reports/facefind.md`). The finder is adopted for the
+face-swap detector v2; the shipped round-3 detector keeps its own. Detector
+v2 is trained so that re-compression carries no label (docs/13 §3.2). Until
+it passes the adoption rules fixed in docs/13 §6, the shipped face-swap
+detector is the round-3 one, evidence only.
+
+Human gates of the first build (env, dataset forms/downloads, ROI glance,
+gate reviews) are collected in `reports/HUMAN_GATES.md`; each later round
+lists its own (docs/11 §6, docs/12 §2, docs/13 §9).
 
 ## License
 
-MIT — see [LICENSE](LICENSE). The face-swap model
-`src/trubeat/models/faceswap.joblib` is trained on FaceForensics++, whose
-terms allow non-commercial research use only (docs/12 §4).
+The code is MIT: see [LICENSE](LICENSE). The trained models in
+`src/trubeat/models/` are not covered by it: `detector.joblib`,
+`aigen.joblib` and `faceswap.joblib` were trained with FaceForensics++ data,
+whose terms allow non-commercial research and educational use only, so
+these models are for non-commercial use, and the app loads them by default.
+[NOTICE](NOTICE) lists every model file, the backbone weights
+`trubeat fetch-models` downloads, and each dataset's terms and attribution.
 
 ## Contact
 

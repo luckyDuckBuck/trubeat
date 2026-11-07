@@ -174,11 +174,15 @@ def build_ppg_maps(ppg: np.ndarray, fps: float) -> np.ndarray  # (R, F, T)  Phas
 
 # model.py
 def train_classifier(X, y, groups) -> Pipeline  # GroupKFold CV inside
-def predict_video(path: str, model) -> Prediction  # label, confidence, votes[], hr, warnings
+def predict_video(path: str, model, config: dict) -> Prediction  # label, confidence, votes[], hr, warnings
+    # config: band, method, frame_height, roi_defs, window_s, overlap (the run's YAML)
 
 # eval.py
-def evaluate_hr(manifest) -> HRReport      # MAE, RMSE, Pearson, Bland-Altman
-def evaluate_detector(manifest, model) -> DetectionReport  # acc, AUC, PR, confusion
+def evaluate_hr(manifest, config: dict) -> HRReport      # MAE, RMSE, Pearson r, per-subject table
+def evaluate_detector(manifest, model, config: dict) -> DetectionReport
+    # accuracy, AUC, precision, recall, FPR on reals, confusion, bootstrap CIs, n;
+    # runs validate_manifest first
+    # 2026-11-07 (docs/13 D-09): `config` was always a parameter of these three; the doc lacked it.
 
 # hr.py (added 2026-11-01, docs/11 B2; additive)
 def pulse_snr_db(ppg: np.ndarray, fps: float, bpm=None, band=(0.7, 3.0)) -> float  # dB
@@ -187,7 +191,8 @@ def pulse_snr_db(ppg: np.ndarray, fps: float, bpm=None, band=(0.7, 3.0)) -> floa
 def sample_segments(path, config=None) -> tuple[np.ndarray, dict]  # (S, N, H, W, 3) uint8, meta
 class Embedder: def embed(frames: np.ndarray) -> np.ndarray      # (N, D) unit-norm
 def trajectory_features(emb: np.ndarray) -> dict                  # GEOMETRY_COLUMNS
-def analyze(path, bundle, embedder=None) -> AIGenResult           # p_ai, score, label, warnings
+def analyze(path, bundle, embedder=None, use_cache=False, normalize=True) -> AIGenResult
+    # p_ai, score, label, warnings
     # 2026-11-06 (additive): optional progress(fraction, stage).
 
 # provenance.py (added 2026-11-01, docs/11 D2; additive, offline C2PA read)
@@ -197,6 +202,8 @@ def read_provenance(path) -> ProvenanceResult  # has_c2pa, ai_declared, source_t
 #   region inside the ffmpeg normalisation (or while decoding without ffmpeg);
 #   normalize_for_inference(path, norm, workdir, region=None, max_seconds=120) returns
 #   (path, warnings, region_applied); the no-ffmpeg decode stops at config max_seconds (120 s).
+#   sample_segments, guarded_segments and segment_embeddings take the same region=None (each
+#   decoded frame is cropped; the embedding cache key includes the region).
 # facefind.py (2026-11-07, docs/13 §3.1): TwoPassFinder(config).largest_face(rgb) -> (cx, cy, side) | None
 #   (the round-3 pass first, YuNet + Landmarker-on-a-crop only when it finds nothing); last_seen,
 #   last_source; resolve_yunet_path()
@@ -207,6 +214,12 @@ def read_provenance(path) -> ProvenanceResult  # has_c2pa, ai_declared, source_t
 #   capture deleted once analysed; Content Credentials decide only when their signature
 #   validates (Valid/Trusted), otherwise the claim is stated in the detail and the other layers
 #   decide.
+# claims.py (2026-11-07, docs/13 A-07): claims_for(bundle) -> dict | None (the bundle's own
+#   `claims`, else models/claims.json by the bundle file's SHA-256); about(rate) -> words;
+#   caveat(ai, pulse, fsd, fsd_mode) -> str. app: PulseAnalysis gains claims and caveat (the
+#   API's caveat is the one for the models that analysed the clip); model_claims(...) and
+#   current_caveat(); verdict texts and the pulse check's strict threshold come from the claims;
+#   a bundle found by search that would override the packaged one without claims is refused.
 # aigen.py (2026-11-06, docs/12 item A; additive): the title-card guard
 def sample_segments(path, config=None, starts_s=None) -> tuple[np.ndarray, dict]  # explicit starts
 def is_graphic(segment, config=None) -> bool          # mostly flat 8x8 blocks
@@ -274,7 +287,7 @@ trubeat/
 | `E_UNREADABLE` | file won't decode | abort with message |
 | `E_LOW_FPS` | fps missing or < 15 | abort — bpm math is invalid |
 | `E_SHORT_VIDEO` | < 10 s usable | abort — frequency resolution meaningless |
-| `E_NO_FACE` | no frame has a face (`model.predict_video`) | abort |
+| `E_NO_FACE` | no frame has a face (`model.predict_video`); no ROI yields a heart rate: face never tracked or all-NaN ROI traces (`eval.evaluate_hr`) | abort |
 | `W_UNSTABLE_TRACK` | intermittent tracking | continue, flag in output |
 | `E_MODEL_MISSING` | AI-video backbone weights not in the local cache | that layer is skipped with the message; `trubeat fetch-models` downloads them (the only network step, user-initiated) |
 | `W_LOW_CONFIDENCE` | reserved; not emitted by any module (2026-11-07 audit) | — |

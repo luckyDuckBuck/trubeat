@@ -174,8 +174,9 @@ bundle file, and a stage-2 bundle whose weights do not match its SHA-256. Traini
 first segments; held-out AI-video numbers are then recomputed and must not
 change by more than the flagged share.
 
-*Result and revision (2026-11-06, `scripts/check_graphics_guard.py` →
-`reports/graphics_guard.md`):* the flatness-only rule flagged **140 /
+*Result and revision (2026-11-06, `scripts/check_graphics_guard.py`; its
+report stays local because it names the user's own clip, so the counts that
+decide are recorded in this paragraph):* the flatness-only rule flagged **140 /
 8,655 = 1.62%** of first segments, 134 of them AI clips with smooth, flat
 scenes; **not adopted**. It did flag exactly the RepresentUs end cards
 (4 of 26 segments). Revision, fixed here before the re-check, chosen on

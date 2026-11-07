@@ -1,0 +1,184 @@
+TrueBeat
+Copyright (c) 2026 Ayushman Tripathi
+
+The source code in this repository is licensed under the MIT License (see
+LICENSE). The MIT License covers the code only. The model files in
+src/trubeat/models/ and the backbone weights that `trubeat fetch-models`
+downloads come with their own terms, listed below.
+
+In short:
+
+  * detector.joblib, aigen.joblib and faceswap.joblib were trained with
+    FaceForensics++ data, whose terms of use allow non-commercial research
+    and educational use only. These three files are provided for
+    non-commercial research and educational use only. The app loads all
+    three by default, so TrueBeat as shipped is for non-commercial research
+    and educational use; the code alone, without these files, is MIT.
+  * face_landmarker.task (Apache License 2.0) and
+    face_detection_yunet_2023mar.onnx (MIT License) are third-party models,
+    redistributed unmodified.
+  * No dataset is redistributed here: videos are never committed
+    (data/raw/ is gitignored), and data/manifests/ holds file lists and
+    labels, no media.
+
+
+1. Models trained by this project (src/trubeat/models/)
+-------------------------------------------------------
+
+faceswap.joblib
+  The round-3 face-swap detector (docs/12 §9), shown as evidence only: a
+  logistic regression over frozen CLIP ViT-B/16 features of face crops,
+  trained on FaceForensics++ c23 train + val (original, Deepfakes,
+  Face2Face, FaceShifter, FaceSwap, NeuralTextures). DeepFakeDetection was
+  a test set only.
+  Terms: FaceForensics++ (section 4): non-commercial research and
+  educational use only.
+  Round 4 (docs/13) trains its replacement on FaceForensics++ and DF40
+  fakes (CC BY-NC 4.0, section 4); it uses no OpenVid-1M clips (docs/13
+  §6.6 item 9). If it ships, it stays non-commercial and carries their
+  attribution.
+
+detector.joblib
+  The pulse-consistency face-swap check (G2, reports/g2_detector.md): a
+  logistic regression over rPPG consistency features, trained and tuned on
+  the FaceForensics++ c23 train and validation splits.
+  Terms: FaceForensics++: non-commercial research and educational use only.
+
+aigen.joblib
+  The AI-video detector (docs/11 §9): a logistic regression over frozen
+  DINOv2 ViT-S/14 features. Training data, as recorded in the bundle:
+  AIGVDBench (3,721 clips), Rapidata text-to-video sets (1,492 clips) and
+  157 FaceForensics++ c23 original (real) train/val clips.
+  Terms: FaceForensics++ clips are part of its training data, so it is for
+  non-commercial research and educational use only. AIGVDBench is
+  CC BY 4.0 and the Rapidata sets are Apache-2.0 (section 4).
+
+Other files in src/trubeat/models/ written by this project, such as
+claims.json (the measured numbers the app may quote), are covered by the
+MIT License with the code.
+
+
+2. Third-party model files (src/trubeat/models/, unmodified)
+------------------------------------------------------------
+
+face_landmarker.task
+  MediaPipe Face Landmarker, Google: the BlazeFace short-range face
+  detector, Face Mesh V2 and Blendshape V2 models in one bundle. Licensed
+  under the Apache License, Version 2.0, as each model's card states:
+  https://www.apache.org/licenses/LICENSE-2.0
+
+face_detection_yunet_2023mar.onnx
+  YuNet face detector, from the OpenCV Model Zoo (opencv/opencv_zoo,
+  models/face_detection_yunet). MIT License:
+
+    MIT License
+
+    Copyright (c) 2020 Shiqi Yu <shiqi.yu@gmail.com>
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the
+    "Software"), to deal in the Software without restriction, including
+    without limitation the rights to use, copy, modify, merge, publish,
+    distribute, sublicense, and/or sell copies of the Software, and to
+    permit persons to whom the Software is furnished to do so, subject to
+    the following conditions:
+
+    The above copyright notice and this permission notice shall be included
+    in all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+    OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+    MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+    IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+    CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+    TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+    SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+
+3. Backbone weights downloaded by `trubeat fetch-models` (not in this repo)
+---------------------------------------------------------------------------
+
+The command downloads these from Hugging Face into the local cache when the
+user runs it; the analysis itself never downloads anything.
+
+timm/vit_small_patch14_dinov2.lvd142m
+  DINOv2 ViT-S/14, Meta AI. Apache License 2.0. Used by aigen.joblib.
+  M. Oquab et al., "DINOv2: Learning Robust Visual Features without
+  Supervision", 2023 (arXiv:2304.07193).
+
+timm/vit_base_patch16_clip_224.openai
+  CLIP ViT-B/16, OpenAI. Released by OpenAI under the MIT License
+  (openai/CLIP, Copyright (c) 2021 OpenAI); timm's copy is labelled
+  Apache-2.0. OpenAI's model card, reproduced on timm's model page, says
+  the model "is intended as a research output for research communities"
+  and puts any deployed use case, commercial or not, out of scope. Used by
+  faceswap.joblib.
+  A. Radford et al., "Learning Transferable Visual Models From Natural
+  Language Supervision", ICML 2021.
+
+
+4. Datasets: terms and attribution
+----------------------------------
+
+FaceForensics++, and the DeepFakes Detection Dataset distributed with it
+(pyproject.toml names these terms LicenseRef-FaceForensics-NonCommercial)
+  Terms of use: https://kaldir.vc.in.tum.de/faceforensics_tos.pdf
+  Among them:
+    1. "Researcher shall use the Database only for non-commercial research
+       and educational purposes."
+    4. "Researcher may provide research associates and colleagues with
+       access to the Database provided that they first agree to be bound
+       by these terms and conditions."
+    6. "If Researcher is employed by a for-profit, commercial entity,
+       Researcher's employer shall also be bound by these terms and
+       conditions, ..."
+  The terms do not mention trained models; this project applies them to
+  every model trained with the data (section 1). The data itself is never
+  redistributed here.
+  A. Rössler, D. Cozzolino, L. Verdoliva, C. Riess, J. Thies and
+  M. Nießner, "FaceForensics++: Learning to Detect Manipulated Facial
+  Images", ICCV 2019.
+  N. Dufour, A. Gully et al., "DeepFakes Detection Dataset by Google &
+  JigSaw", 2019.
+
+DF40 (round 4: training fakes of the face-swap detector v2, if used)
+  Creative Commons Attribution-NonCommercial 4.0 International, for the
+  dataset and its code: https://creativecommons.org/licenses/by-nc/4.0/
+  Z. Yan, T. Yao, S. Chen, Y. Zhao, X. Fu, J. Zhu, D. Luo, L. Yuan,
+  C. Wang, S. Ding et al., "DF40: Toward Next-Generation Deepfake
+  Detection", NeurIPS 2024 Datasets and Benchmarks Track
+  (arXiv:2406.13495).
+
+AIGVDBench (Hugging Face dataset AIGVDBench/AIGVDBench)
+  Creative Commons Attribution 4.0 International:
+  https://creativecommons.org/licenses/by/4.0/
+  Training data of aigen.joblib; every clip was re-encoded to 360p
+  (CRF 28) before features were taken, and no clip is redistributed. Its
+  real clips are OpenVid-1M clips.
+
+OpenVid-1M (the real clips in AIGVDBench; not used by round 4,
+docs/13 §6.6 item 9)
+  Creative Commons Attribution 4.0 International; its dataset card says
+  the dataset "is intended for research and non-commercial purposes".
+  K. Nan et al., "OpenVid-1M: A Large-Scale High-Quality Dataset for
+  Text-to-video Generation", ICLR 2025.
+
+Rapidata text-to-video human-preference sets (Hugging Face, Rapidata)
+  Apache License 2.0. Training data of aigen.joblib (docs/11 §9.7).
+
+Used to measure only; nothing trained on them is shipped:
+  GenBuster-Bench (MIT): the AI-video detector's held-out set and part of
+  the face-swap detector's false-alarm test. UBFC-rPPG: the heart-rate
+  check; its terms forbid showing subjects 21 and 27. Celeb-DF v2
+  (round 4, test only, under the terms accepted in its access form).
+  UADFV (round 4, optional, report only; research use).
+
+
+5. Not part of this repository
+------------------------------
+
+third_party/rppg-toolbox/ is a local reference clone (gitignored; licence:
+Responsible AI Source Code License v1.1). Nothing from it is copied into
+this repository; scripts/crosscheck_pos.py imports it only when the clone
+is present. Python dependencies are installed from PyPI under their own
+licences.

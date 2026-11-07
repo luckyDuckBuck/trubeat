@@ -10,11 +10,28 @@ human pulse from ordinary video via remote photoplethysmography (rPPG), check
 that facial blood-flow signals are consistent across face regions, and flag
 videos that fail. Python, laptop-first, free tooling only.
 
+That is where the project started, not what decides today. `app.verdict_for`
+takes the first layer that fires: Content Credentials (C2PA) whose signature
+validates; the whole-frame AI-video detector ("Likely AI-generated"); a
+face-swap detector whose bundle is decisive (the shipped round-3 bundle is
+evidence only: shown, never deciding); else the pulse-consistency check at
+a strict threshold ("Possible face-swap", weak). If the AI-video detector
+ran and nothing fired, the headline is "No sign of AI generation found",
+never a claim that the video is real or authentic.
+Heart rate and pulse SNR are evidence only. Plans and measured results since
+the first build: `docs/11`, `docs/12`, and `docs/13` (round 4, in progress).
+
 ## 2. First-read order (every session)
 
 1. `docs/00_index.md` — the doc map.
-2. The doc relevant to your current task (architecture → `docs/04`, plan → `docs/07`).
-3. `docs/10_agent_execution_plan.md` — the ordered task backlog. Work top-down.
+2. The current plan, today `docs/13_faceswap_v2_and_audit_plan.md` (its §0
+   is the hand-off brief, §7 the order of work). Work top-down.
+3. The doc relevant to your current task (interfaces and warning codes →
+   `docs/04` §4 and §8; data → `docs/05`; the rounds the plan builds on →
+   `docs/11`, `docs/12`).
+
+`docs/07` (Phases 0 → 4) and the `docs/10` backlog record the first build,
+which is over: read them as history, not as the task list.
 
 If this file and `docs/` ever conflict on *what* to build, `docs/` wins.
 If they conflict on *how* to work, this file wins.
@@ -31,9 +48,13 @@ push to `main`, delete `data/raw`.
 
 ## 4. Build order (the law)
 
-Phase 0 → 1 → 2 → 3 → 4, in `docs/07` order. Never start a phase until its
-gate is met or the human waives it in writing. The backlog in `docs/10`
-is the task list — take the topmost unfinished item, finish it, commit, repeat.
+The current plan's phases, in its order (today `docs/13` §7, phases 0 → 6).
+Never start a phase until its gate is met or the human waives it in writing.
+The plan's order of work is the task list — take the topmost unfinished
+item, finish it, commit, repeat. The first build ran Phase 0 → 1 → 2 → 3 → 4
+in `docs/07` order from the `docs/10` backlog: Phases 1 and 2 failed their
+gates honestly, Phase 3 was not pursued, Phase 4 built the app and the
+extension (README, "Status").
 
 ## 5. Coding rules
 
@@ -64,7 +85,11 @@ is the task list — take the topmost unfinished item, finish it, commit, repeat
 ## 7. Data rules
 
 - `data/raw/`, `data/processed/`, `runs/`, `reports/` are gitignored and stay
-  that way. Raw face videos are never committed, never uploaded.
+  that way. The text reports the docs cite are force-added one by one
+  (`git add -f`; `git ls-files reports` lists them): only reports with no
+  faces or images, no names or paths of the user's own videos and no
+  dataset download links. Raw face videos are never committed, never
+  uploaded.
 - Faces are biometric data. Local-only by default; the inference path makes
   zero network calls.
 
@@ -88,17 +113,25 @@ is the task list — take the topmost unfinished item, finish it, commit, repeat
 ## 9. Human gates (only the human does these — prepare each as a single action)
 
 1. Creating the Python env and installing deps.
-2. Submitting dataset access forms (FF++, Celeb-DF).
+2. Submitting dataset access forms (done so far: FaceForensics++ with
+   DeepFakeDetection, DF40, Celeb-DF v2; `docs/13` §5).
 3. Downloading datasets into `data/raw/`.
-4. Glancing at `reports/roi_placement.png` to confirm ROI polygons.
+4. Glancing at the ROI check images (`reports/roi_check_subject01.png`,
+   `roi_check_subject15.png`, `roi_check_subject38.png`; local only, they
+   show faces) to confirm ROI polygons. Passed 2026-10-18
+   (`reports/HUMAN_GATES.md` B4).
 5. Reviewing phase-gate reports and pasting results back.
 
+Each plan lists its own gates as single actions (`docs/11` §6, `docs/12` §2,
+`docs/13` §9); `reports/HUMAN_GATES.md` is the first build's checklist.
+
 Everything else is yours. The initial direction: do every task that needs no
-human, in backlog order, until you hit a gate — then present the gate checklist
-and stop.
+human, in the current plan's order, until you hit a gate — then present the
+gate checklist and stop.
 
 ## 10. When blocked
 
 Write `reports/BLOCKERS.md` (what / what you tried / what's needed to unblock),
-commit it, and continue with the next independent backlog item. Never spin on
-a blocked task. Never fake a result to clear a gate.
+commit it (`git add -f`: `reports/` is gitignored), and continue with the next
+independent item of the plan. Never spin on a blocked task. Never fake a
+result to clear a gate.

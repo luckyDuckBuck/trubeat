@@ -3,10 +3,13 @@
 One-action items. Everything else is agent work (see `docs/10_agent_execution_plan.md`).
 Do an item, tell the agent "done", it continues.
 
+This is the first build's checklist (Phases 0–2, October 2026). Later rounds
+list their own gates: `docs/11` §6, `docs/12` §2, `docs/13` §9.
+
 ## B1 — Environment sanity (5 min, once)
 ```bash
 cd ~/workspace/trubeat   # or your clone
-python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
+python3 -m venv .venv && .venv/bin/pip install -e . pytest   # the package + the test runner
 .venv/bin/python -m pytest tests/ -q   # expect: all pass
 ```
 
@@ -17,8 +20,8 @@ submit the forms and wait for the links.
 
 ## B3 — UBFC download (~30 min when the link arrives)
 Follow `docs/09_data_access_starter.md` "tonight's checklist":
-`data/raw/ubfc/` ← 42 `subjectXX/` dirs. Then tell the agent — it runs the
-G1 heart-rate gate (target: MAE ≤ 5 bpm).
+`data/raw/ubfc_rppg/` ← 42 `subject{N}/` dirs (`vid.avi` + `ground_truth.txt`
+each). Then tell the agent — it runs the G1 heart-rate gate (target: MAE ≤ 5 bpm).
 
 ## B4 — ROI placement glance (2 min) — **PASSED 2026-10-18**
 Open `reports/roi_check_subject01.png`, `reports/roi_check_subject15.png`,
@@ -33,7 +36,7 @@ the agent the path — it builds the manifest and runs the G2 gate
 
 ## B6 — Gate reviews (5 min each)
 The agent will hand you `reports/hr_gate_ubfc.md` (G1) and
-`reports/detection_gate_ffpp.md` (G2) with honest pass/fail numbers.
+`reports/g2_detector.md` (G2) with honest pass/fail numbers.
 Approve → it proceeds. Fail → it diagnoses in the open, no silent tuning.
 
 ## B6 — G1 WAIVER 2026-10-18
