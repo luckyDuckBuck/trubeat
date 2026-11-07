@@ -207,6 +207,8 @@ class PulseAnalysis:
     fsd_n_sampled: int = 0
     fsd_top_time_s: float | None = None
     fsd_top_crop: np.ndarray | None = field(default=None, repr=False, compare=False)
+    fsd_top_frame: np.ndarray | None = field(default=None, repr=False, compare=False)
+    fsd_top_box: tuple[int, int, int, int] | None = None  # x0, y0, side, side in that frame
     warnings: list[str] = field(default_factory=list)
     roi_waveforms: list[list[float]] = field(default_factory=list)  # 3 x T
     waveform_names: list[str] = field(default_factory=list)
@@ -216,7 +218,8 @@ class PulseAnalysis:
 
     def to_json(self) -> str:
         d = asdict(self)
-        d.pop("fsd_top_crop", None)  # an image; the UI shows it, the JSON API does not carry it
+        d.pop("fsd_top_crop", None)  # images: the UI shows them, the JSON API does not carry them
+        d.pop("fsd_top_frame", None)
         return json.dumps(d, default=float)
 
 
@@ -436,6 +439,7 @@ def _face_swap_layer(a: PulseAnalysis, path: Path, faceswap_path,
     a.fsd_label, a.fsd_score, a.fsd_threshold = res.label, res.score, res.threshold
     a.fsd_real_percentile, a.fsd_n_faces, a.fsd_n_sampled = res.real_percentile, res.n_faces, res.n_sampled
     a.fsd_top_time_s, a.fsd_top_crop = res.top_time_s, res.top_crop
+    a.fsd_top_frame, a.fsd_top_box = res.top_frame, res.top_box
     a.fsd_available = res.label in ("swap", "no_swap")
     a.warnings += [w for w in res.warnings if w not in a.warnings]
     if a.fsd_available:
@@ -850,6 +854,36 @@ def _ui_theme():
     )
 
 
+def suspicious_frame(a: PulseAnalysis, max_width: int = 960) -> np.ndarray | None:
+    """The frame the face-swap detector found most suspicious, shrunk to at
+    most ``max_width`` pixels wide, with that face outlined in the UI accent
+    (RGB). None when the detector scored no face."""
+    import cv2
+
+    frame, box = a.fsd_top_frame, a.fsd_top_box
+    if frame is None or box is None:
+        return None
+    h, w = frame.shape[:2]
+    k = min(1.0, max_width / max(w, 1))
+    img = cv2.resize(frame, (round(w * k), round(h * k)), interpolation=cv2.INTER_AREA) if k < 1 else frame.copy()
+    x0, y0, side, _ = box
+    p0 = (max(0, round(x0 * k)), max(0, round(y0 * k)))
+    p1 = (min(img.shape[1] - 1, round((x0 + side) * k)), min(img.shape[0] - 1, round((y0 + side) * k)))
+    cv2.rectangle(img, p0, p1, (255, 77, 0), max(2, round(img.shape[1] / 240)))
+    return img
+
+
+# Moves the uploaded video's preview to the most suspicious frame (seconds),
+# paused, once the analysis is shown. Runs in the browser only.
+_SEEK_JS = """(t) => {
+  const v = document.querySelector('#tb-video video');
+  if (v && t !== null && t !== undefined && !Number.isNaN(Number(t))) {
+    v.pause();
+    v.currentTime = Number(t);
+  }
+}"""
+
+
 def build_demo(
     config: dict | None = None,
     model_path: Path | str | None = DEFAULT_MODEL_PATH,
@@ -864,7 +898,8 @@ def build_demo(
         if progress is None:
             progress = gr.Progress()
         if not video_path:
-            return ("Upload a video first.", "", "", None, None, CAVEAT)
+            return ("Upload a video first.", "", "", gr.update(value=None, visible=False), None,
+                    CAVEAT, None)
         progress(0.0, desc="Starting")
         analysis = analyze_video(
             video_path, cfg, model_path=model_path, thresholds=thresholds,
@@ -872,13 +907,15 @@ def build_demo(
         )
         progress(1.0, desc="Done")
         evidence = _evidence_text(analysis)
-        face = None
-        if analysis.fsd_top_crop is not None:
-            caption = (f"most suspicious face, at {analysis.fsd_top_time_s:.1f} s "
-                       f"(face-swap score {analysis.fsd_score:+.2f}"
-                       f"{'' if analysis.fsd_mode == 'decisive' else ', evidence only'})")
-            face = [(analysis.fsd_top_crop, caption)]  # a Gallery takes a list
-        return (analysis.headline, analysis.detail, evidence, face, _plot(analysis), CAVEAT)
+        img = suspicious_frame(analysis)
+        if img is None:  # the panel appears only when the detector scored a face
+            face, seek = gr.update(value=None, visible=False), None
+        else:
+            caption = (f"Most suspicious frame, at {analysis.fsd_top_time_s:.1f} s: face-swap score "
+                       f"{analysis.fsd_score:+.2f}"
+                       f"{'' if analysis.fsd_mode == 'decisive' else ', evidence only'}")
+            face, seek = gr.update(value=img, label=caption, visible=True), analysis.fsd_top_time_s
+        return (analysis.headline, analysis.detail, evidence, face, _plot(analysis), CAVEAT, seek)
 
     # Note (gradio 6+): theme/CSS moved from the Blocks constructor to
     # demo.launch(); they are applied in main() from _ui_theme()/UI_CSS.
@@ -905,8 +942,11 @@ def build_demo(
                 verdict = gr.Markdown(elem_id="tb-verdict")
                 detail = gr.Markdown(elem_id="tb-detail")
                 evidence = gr.Markdown(elem_id="tb-evidence")
-                face_img = gr.Gallery(label="Face the face-swap detector found most suspicious",
-                                      elem_id="tb-face", columns=1, height=260, allow_preview=False)
+                # Hidden until an analysis has scored a face; the whole frame,
+                # scaled to fit (no inner scrolling), with the face outlined.
+                face_img = gr.Image(label="Most suspicious frame", elem_id="tb-face", type="numpy",
+                                    interactive=False, visible=False)
+                seek = gr.Number(visible=False, elem_id="tb-seek")
         plot = gr.Plot(label="Per-region pulse waveforms", elem_id="tb-plot")
         caveat = gr.Markdown(
             f"**Caveat: always applies:** {CAVEAT}", elem_id="tb-caveat"
@@ -917,9 +957,12 @@ def build_demo(
         btn.click(
             run,
             inputs=[video],
-            outputs=[verdict, detail, evidence, face_img, plot, caveat],
+            outputs=[verdict, detail, evidence, face_img, plot, caveat, seek],
             show_progress_on=[plot],
-        )
+        ).then(None, inputs=[seek], outputs=None, js=_SEEK_JS)
+        # a new upload hides the previous clip's frame until it is analysed
+        video.change(lambda _v: gr.update(value=None, visible=False), inputs=[video],
+                     outputs=[face_img], show_progress="hidden")
 
         # Thin, machine-readable endpoint for the browser extension
         # (Phase 4b). It only *packages* what analyze_video already

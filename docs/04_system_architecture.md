@@ -80,7 +80,11 @@ title cards (`aigen.guarded_segments`, `W_GRAPHICS_SKIPPED`,
 `E_GRAPHICS_ONLY`). The detector's numbers travel as `fsd_*` fields;
 2026-11-07 added `fsd_outside_fpr`, the share of real non-FaceForensics
 faces it flagged in gate 4 (from `bundle["gate4"]`), quoted whenever an
-evidence-only flag is shown. The installed bundle is evidence only
+evidence-only flag is shown. Also 2026-11-07: `FaceSwapResult.top_frame` /
+`top_box` (the whole sampled frame the most suspicious crop came from, and
+the face box in it) and the matching `PulseAnalysis.fsd_top_frame` /
+`fsd_top_box`; the app shows that frame with the face outlined, after the
+analysis only. Images never travel in the JSON API. The installed bundle is evidence only
 (docs/12 §9).
 
 Since 2026-11-06 `analyze_video` takes an optional

@@ -505,5 +505,23 @@ def test_json_api_leaves_out_the_face_image():
 
     a = _fsd("swap", 1.4)
     a.fsd_top_crop = np.zeros((8, 8, 3), np.uint8)
+    a.fsd_top_frame = np.zeros((90, 160, 3), np.uint8)
     d = json.loads(verdict_for(a, THR).to_json())
-    assert "fsd_top_crop" not in d and d["fsd_score"] == 1.4 and d["decided_by"] == "face_swap"
+    assert "fsd_top_crop" not in d and "fsd_top_frame" not in d
+    assert d["fsd_score"] == 1.4 and d["decided_by"] == "face_swap"
+
+
+def test_suspicious_frame_outlines_the_face_and_fits_the_panel():
+    import numpy as np
+
+    a = _fsd("no_swap", -0.5)
+    assert app_mod.suspicious_frame(a) is None  # no frame: the panel stays hidden
+    a.fsd_top_frame = np.zeros((1080, 1920, 3), np.uint8)
+    a.fsd_top_box = (900, 400, 200, 200)
+    img = app_mod.suspicious_frame(a)
+    assert img.shape == (540, 960, 3)  # shrunk to the panel width, aspect kept
+    assert tuple(img[200, 450]) == (255, 77, 0)  # the box edge, in the UI accent
+    assert img[250, 500].sum() == 0  # inside the box: the frame itself, untouched
+    assert a.fsd_top_frame.sum() == 0  # the analysis' frame is not drawn on
+    a.fsd_top_box = (-50, -50, 400, 400)  # a box past the frame edge is clipped, not an error
+    assert app_mod.suspicious_frame(a) is not None

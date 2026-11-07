@@ -509,10 +509,15 @@ class FaceSwapResult:
     top_time_s: float | None = None
     warnings: list[str] = field(default_factory=list)
     top_crop: np.ndarray | None = field(default=None, repr=False)
+    # the whole sampled frame the top crop came from (native RGB) and the
+    # face box in it (x0, y0, side, side; may extend past the frame edge)
+    top_frame: np.ndarray | None = field(default=None, repr=False)
+    top_box: tuple[int, int, int, int] | None = None
 
     def to_json(self) -> str:
         d = asdict(self)
         d.pop("top_crop")
+        d.pop("top_frame")
         return json.dumps(d)
 
 
@@ -564,5 +569,8 @@ def analyze(path: str | Path, bundle: dict, embedder: FaceEmbedder | CNNScorer |
     top = int(np.argmax(per))
     ref = bundle.get("real_reference_scores")
     pct = float(np.mean(np.asarray(ref) < score)) if ref is not None and len(ref) else None
+    c = crops[top]
+    frame = sampled.frames[sampled.index.index(c.frame_index)]
     return FaceSwapResult(score, thr, "swap" if score >= thr else "no_swap", pct,
-                          top_time_s=float(crops[top].time_s), top_crop=crops[top].crop, **base)
+                          top_time_s=float(c.time_s), top_crop=c.crop, top_frame=frame,
+                          top_box=tuple(int(v) for v in c.box), **base)

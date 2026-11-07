@@ -113,6 +113,10 @@ def test_analyze_scores_and_reports_the_most_suspicious_crop(tmp_path):
     assert r.top_crop is not None and r.top_crop.shape == (32, 32, 3)
     assert r.top_time_s == max(r.top_time_s, 0.0) and r.real_percentile == 1.0
     assert "top_crop" not in json.loads(r.to_json())
+    # the whole frame that crop came from, and the face box in it (shown in the app)
+    assert r.top_frame is not None and r.top_frame.ndim == 3 and len(r.top_box) == 4
+    d = json.loads(r.to_json())
+    assert "top_frame" not in d and d["top_box"] == list(r.top_box)
     r = fs.analyze(p, _bundle(), embedder=_StubEmbedder(-1.0), finder=_StubFinder(found=6))
     assert r.label == "no_swap" and r.score < r.threshold
 
