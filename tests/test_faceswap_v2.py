@@ -80,3 +80,29 @@ def test_ship_rules():
     assert t.ship_decision(gates, close, r3)[0] == "keep-round3"   # overlapping intervals
     assert t.ship_decision(_g(g1=True, g2=True, g2b=False, g3=True), good, r3)[0] == "stage2"
     assert t.ship_decision(_g(g1=None, g2=True, g2b=True, g3=True), good, r3)[0] == "stage2"  # missing core gate
+
+
+def test_shards_partition_the_videos_and_are_stable():
+    ids = [f"ffpp__Deepfakes__{i:03d}_{(i * 7) % 1000:03d}" for i in range(600)]
+    shards = [t.shard_of(v, 3) for v in ids]
+    assert shards == [t.shard_of(v, 3) for v in ids]              # same answer in every session
+    counts = np.bincount(shards, minlength=3)
+    assert counts.sum() == len(ids) and counts.min() > 150         # every video in exactly one, roughly balanced
+    assert t.parse_shard("2/3") == (2, 3) and t.parse_shard("") is None
+    with pytest.raises(SystemExit):
+        t.parse_shard("3/3")
+
+
+def test_dfd_groups_join_both_actors_over_the_whole_manifest():
+    stems = ["01__walk", "01_02__talk__A", "02_05__hug__B", "07__sit", "05__run"]
+    g = t.dfd_groups(stems)
+    assert g["01__walk"] == g["01_02__talk__A"] == g["02_05__hug__B"] == g["05__run"] == "dfd:01"
+    assert g["07__sit"] == "dfd:07"
+    # two shards grouped separately disagree; regrouping the concatenation restores one group per person
+    rows = [{"video_id": f"dfd__x__{s}", "dataset": "dfd", "source_id": s, "group": ""} for s in stems]
+    a, b = pd.DataFrame(rows[:2]), pd.DataFrame(rows[2:])
+    for part in (a, b):
+        part["group"] = part.source_id.map(t.dfd_groups(part.source_id.tolist()))
+    assert b.set_index("source_id").group["05__run"] == "dfd:02"   # shard-local answer
+    both = t.regroup_dfd(pd.concat([a, b], ignore_index=True))
+    assert both.set_index("source_id").group.to_dict() == g

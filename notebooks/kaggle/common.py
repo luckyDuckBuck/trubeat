@@ -9,7 +9,6 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 import time
 
 T0 = time.time()
@@ -22,6 +21,7 @@ W = "/kaggle/working"
 DATA = "/tmp/trubeat_data"
 SESSION_S = 11.0 * 3600          # Kaggle ends sessions at 12 h; stop with an hour to spare
 LINKS = json.loads(r'''__LINKS__''')
+SHARD = "__SHARD__"              # "I/N" for a K1 shard (scripts/kaggle_run.py), else empty
 os.environ["MPLBACKEND"] = "Agg"
 
 
@@ -68,14 +68,16 @@ def setup(gpu=True):
         raise SystemExit("no CUDA in the training environment")
 
 
+def input_dirs(name):
+    """Every directory called ``name`` under /kaggle/input (kernel outputs are
+    mounted there; the depth has changed over time, so search)."""
+    import glob
+    return sorted(d for d in glob.glob(f"/kaggle/input/**/{name}", recursive=True) if os.path.isdir(d))
+
+
 def resume_from_inputs():
     """Copy feature files from an earlier kernel's output (kernel_sources) so an
     interrupted extraction continues instead of restarting."""
-    base = "/kaggle/input"
-    if not os.path.isdir(base):
-        return
-    for d in sorted(os.listdir(base)):
-        src = os.path.join(base, d, "features")
-        if os.path.isdir(src):
-            log(f"resuming from {src}")
-            sh(f"mkdir -p {W}/features && cp -rn {src}/. {W}/features/")
+    for src in input_dirs("features"):
+        log(f"resuming from {src}")
+        sh(f"mkdir -p {W}/features && cp -rn {src}/. {W}/features/")

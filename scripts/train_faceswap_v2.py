@@ -98,6 +98,43 @@ class UnionFind:
             self.p[max(ra, rb)] = min(ra, rb)
 
 
+def shard_of(video_id: str, n: int) -> int:
+    """Stable shard of a video: the cloud fetch + extraction of FF++ and DFD is
+    split across parallel sessions by this (a session holds ~4 vCPU)."""
+    return int(hashlib.sha256(video_id.encode()).hexdigest()[:8], 16) % n
+
+
+def parse_shard(text: str | None) -> tuple[int, int] | None:
+    if not text:
+        return None
+    i, n = (int(x) for x in text.split("/"))
+    if not 0 <= i < n:
+        raise SystemExit(f"bad --shard {text}: want I/N with 0 <= I < N")
+    return i, n
+
+
+def dfd_groups(stems: list[str]) -> dict[str, str]:
+    """DFD stem -> identity group over every DFD video given: both actors of a
+    swap are joined (docs/13 B-17). Run on the whole manifest, so shards
+    fetched in separate sessions end up with the same groups."""
+    uf = UnionFind()
+    first = {}
+    for stem in stems:
+        actors = [x for x in stem.split("__")[0].split("_") if x]
+        first[stem] = f"dfd:{actors[0]}"
+        for x in actors[1:]:
+            uf.union(f"dfd:{actors[0]}", f"dfd:{x}")
+    return {s: uf.find(g) for s, g in first.items()}
+
+
+def regroup_dfd(df: pd.DataFrame) -> pd.DataFrame:
+    m = df.dataset == "dfd"
+    if m.any():
+        g = dfd_groups(df.loc[m, "source_id"].tolist())
+        df.loc[m, "group"] = df.loc[m, "source_id"].map(g)
+    return df
+
+
 def ffpp_splits(root: Path) -> tuple[dict[str, str], dict[str, str]]:
     """FaceForensics++ id -> split, id -> its official pair group."""
     split_of, group_of = {}, {}
@@ -224,13 +261,20 @@ def cmd_fetch(a) -> None:
         base = tf3.pick_server()
         log(f"FaceForensics++ server {base}")
         pairs = json.loads(tf3._get(base + "misc/filelist.json"))
+        shard = parse_shard(a.shard)
+
+        def keep(video_id: str) -> bool:  # same ids as the manifest; c23 and c40 of a video share a shard
+            return shard is None or shard_of(video_id, shard[1]) == shard[0]
+
         jobs = []
         for comp in a.compression:
-            jobs += [f"original_sequences/youtube/{comp}/videos/{x}.mp4" for x in sorted({v for p in pairs for v in p})]
+            jobs += [f"original_sequences/youtube/{comp}/videos/{x}.mp4" for x in sorted({v for p in pairs for v in p})
+                     if keep(f"ffpp__original__{x}")]
             for m in FFPP_METHODS:
                 for p in pairs:
-                    jobs += [f"manipulated_sequences/{m}/{comp}/videos/{p[0]}_{p[1]}.mp4",
-                             f"manipulated_sequences/{m}/{comp}/videos/{p[1]}_{p[0]}.mp4"]
+                    for t, s in ((p[0], p[1]), (p[1], p[0])):
+                        if keep(f"ffpp__{m}__{t}_{s}"):
+                            jobs.append(f"manipulated_sequences/{m}/{comp}/videos/{t}_{s}.mp4")
         names = json.loads(tf3._get(base + "misc/deepfake_detection_filenames.json"))
         rng = np.random.default_rng(int(cfg["seed"]))
         real = sorted(names["actors"])
@@ -238,9 +282,10 @@ def cmd_fetch(a) -> None:
         pick_r = sorted(rng.choice(real, size=min(a.dfd_real, len(real)), replace=False).tolist())
         pick_f = sorted(rng.choice(fake, size=min(a.dfd_fake, len(fake)), replace=False).tolist())
         for comp in a.compression:
-            jobs += [f"{DFD_REAL}/{comp}/videos/{n}.mp4" for n in pick_r]
-            jobs += [f"{DFD_FAKE}/{comp}/videos/{n}.mp4" for n in pick_f]
-        log(f"FaceForensics++ + DFD: {len(jobs)} files")
+            jobs += [f"{DFD_REAL}/{comp}/videos/{n}.mp4" for n in pick_r if keep(f"dfd__DFD-original__{n}")]
+            jobs += [f"{DFD_FAKE}/{comp}/videos/{n}.mp4" for n in pick_f if keep(f"dfd__DFD__{n}")]
+        report["ffpp_shard"] = a.shard or "all"
+        log(f"FaceForensics++ + DFD: {len(jobs)} files (shard {a.shard or 'all'})")
         missing = []
         with ThreadPoolExecutor(a.threads) as ex:
             futs = {ex.submit(tf3.fetch, base + j, root / "ffpp" / j): j for j in jobs}
@@ -306,18 +351,15 @@ def manifest_ffpp(root: Path) -> list[dict]:
                                  "path": str(root / f"manipulated_sequences/{m}/c23/videos/{stem}.mp4"),
                                  "path_c40": str(root / f"manipulated_sequences/{m}/c40/videos/{stem}.mp4"),
                                  "split": split, "group": group_of[a], "source_id": stem})
-    uf = UnionFind()
     dfd = []
     for sub, label, fam in ((DFD_REAL, "real", "DFD-original"), (DFD_FAKE, "fake", "DFD")):
         for p in sorted((root / sub / "c23/videos").glob("*.mp4")):
-            actors = [x for x in p.stem.split("__")[0].split("_") if x]
-            for x in actors[1:]:
-                uf.union(f"dfd:{actors[0]}", f"dfd:{x}")       # docs/13 B-17: both actors of a swap
             dfd.append({"video_id": f"dfd__{fam}__{p.stem}", "dataset": "dfd", "family": fam, "label": label,
                         "path": str(p), "path_c40": str(root / sub / "c40/videos" / p.name),
-                        "split": "external", "group": f"dfd:{actors[0]}", "source_id": p.stem})
+                        "split": "external", "group": "", "source_id": p.stem})
+    groups = dfd_groups([r["source_id"] for r in dfd])   # docs/13 B-17: both actors of a swap
     for r in dfd:
-        r["group"] = uf.find(r["group"])
+        r["group"] = groups[r["source_id"]]
     return rows + dfd
 
 
@@ -1043,6 +1085,7 @@ def cmd_select(a) -> None:
     if a.smoke:  # tiny settings for a local end-to-end check; never for a decision
         sel = dict(sel, repeats=1, folds=3, n_jobs=2)
     df = pd.read_csv(a.manifest, dtype=str, keep_default_na=False)
+    df = regroup_dfd(df)        # shards were grouped separately; join DFD actors over the whole manifest
     check_manifest_v2(df)
     fdir, out = Path(a.features_dir), Path(a.out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -1262,6 +1305,7 @@ def main() -> None:
     f.add_argument("--dfd-real", type=int, default=150)
     f.add_argument("--dfd-fake", type=int, default=300)
     f.add_argument("--threads", type=int, default=8)
+    f.add_argument("--shard", default=None, help="I/N: fetch only shard I of N of the FF++ and DFD videos")
     f.add_argument("--links", default=None, help="JSON with df40_ids and cdf2_id (kept out of the repo)")
     f.add_argument("--config", default=None)
     m = sub.add_parser("manifest")
