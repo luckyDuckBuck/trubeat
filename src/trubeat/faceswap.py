@@ -122,11 +122,15 @@ def sample_frames(path: str | Path, n: int, max_seconds: float) -> SampledFrames
             raise UnreadableVideo(f"cannot open video: {path}")
         fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
         n_total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-        if n_total <= 0:  # container without a frame count: count first
-            while cap.grab():
+        if n_total <= 0:  # container without a frame count (e.g. a recorded WebM): count
+            # first, but only as far as sampling can reach, so a long file is not decoded in full
+            limit = int(max_seconds * (fps if fps > 0 else 60.0)) + 1
+            while n_total < limit and cap.grab():
                 n_total += 1
             cap.release()
             cap = cv2.VideoCapture(str(p))
+            if not cap.isOpened():
+                raise UnreadableVideo(f"cannot reopen video: {path}")
         want = target_indices(n_total, fps, n, max_seconds)
         if not want:
             raise UnreadableVideo(f"no decodable frames: {path}")
@@ -425,10 +429,13 @@ def _weight_candidates(bundle: dict) -> list[Path]:
 def cnn_weights_path(bundle: dict) -> Path | None:
     """The first local copy of the bundle's weights whose SHA-256 matches the
     bundle; a copy left from another training run is skipped, never paired
-    with this bundle's threshold."""
+    with this bundle's threshold. A bundle without a SHA-256 cannot be
+    verified, so no copy is paired with it."""
     want = bundle["cnn"].get("sha256")
+    if not want:
+        return None
     for p in _weight_candidates(bundle):
-        if not want or _sha256(p) == want:
+        if _sha256(p) == want:
             return p
     return None
 

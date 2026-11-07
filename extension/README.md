@@ -23,7 +23,9 @@ and one set of thresholds.
    would be dropped by the service worker's ~30-second idle leash, while the
    offscreen document holds the connection and resumes it if it drops.
 4. A small panel appears in the bottom-right of the page with the verdict,
-   the evidence numbers and the standing caveat.
+   the evidence numbers and the standing caveat. Since 1.2.0 it also shows
+   the backend's face-swap detector row (score, threshold, faces found;
+   "evidence only" while the detector does not decide, docs/12 §9).
 
 **Verdicts are exactly three states** (same wording as the web app and the
 website):
@@ -31,7 +33,7 @@ website):
 | Verdict | Meaning | Colour |
 |---------|---------|--------|
 | `No sign of AI generation found` | the whole-frame AI-video detector ran and nothing fired (not proof the video is real) | green |
-| `Likely AI-generated or manipulated` | Content Credentials declare AI generation, the AI-video detector is over its threshold, or the strict face-swap check fired; the panel's headline says which | red |
+| `Likely AI-generated or manipulated` | Content Credentials declare AI generation, the AI-video detector is over its threshold, or the strict pulse face-swap check fired; the panel's headline says which. The face-swap detector's score is shown as evidence only and never decides | red |
 | `Inconclusive` | no check could decide: e.g. the clip is under 2 s, unreadable, or the AI-video model is not installed | amber |
 
 The caveat is always on screen:
@@ -39,8 +41,10 @@ The caveat is always on screen:
 > Checks for AI-generated video (trained on 21 generator families; in tests
 > it caught about 4 in 5 clips from 2024-era tools, about half from the
 > newest, and wrongly flagged about 5% of real videos) and, weakly, for
-> face-swaps. Blind to reenactment fakes (Face2Face, NeuralTextures).
-> 'No sign of AI generation' is not proof a video is real.
+> face-swaps: the pulse check catches about a quarter of Deepfakes-style
+> swaps and is blind to reenactment fakes (Face2Face, NeuralTextures); the
+> face-swap detector is evidence only (it flagged 38% of real faces outside
+> its training data). 'No sign of AI generation' is not proof a video is real.
 
 ## Install (load unpacked)
 
@@ -76,7 +80,7 @@ The caveat is always on screen:
 | Setting | Default | Notes |
 |---------|---------|-------|
 | Backend URL | `http://127.0.0.1:7860` | any TrueBeat backend that exposes the `analyze_video` endpoint |
-| Capture length | 20 s | 12–60 s, cut to what is left of the clip. The AI-video check needs 2 s; the face-swap check needs 10 s |
+| Capture length | 20 s | 12–60 s, cut to what is left of the clip. The AI-video check and the face-swap detector need 2 s; the pulse face-swap check needs 10 s |
 
 For a **hosted** backend (e.g. an `https://*.hf.space` URL) the extension asks
 Chrome for permission to reach that origin when you save. Local addresses

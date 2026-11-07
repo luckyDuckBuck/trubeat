@@ -262,6 +262,14 @@ def test_cnn_weights_next_to_the_bundle_are_found(tmp_path, monkeypatch):
     assert fs.cnn_weights_path(bundle) == (tmp_path / "w.safetensors").resolve()
 
 
+def test_cnn_weights_are_never_paired_with_a_bundle_without_a_hash(tmp_path, monkeypatch):
+    # review 2026-11-07: an unverifiable bundle must not pick up a same-named stale copy
+    (tmp_path / "w.safetensors").write_bytes(b"old weights")
+    monkeypatch.setattr(fs, "model_dirs", lambda: [])  # noqa: PIE807
+    bundle = {"_path": str(tmp_path / "faceswap_cnn.joblib"), "cnn": {"file": "w.safetensors"}}
+    assert fs.cnn_weights_path(bundle) is None
+
+
 def test_clips_under_two_seconds_are_not_judged(tmp_path):
     p = synth.write_pulse_video(tmp_path / "v.mp4", fps=30.0, duration_s=1.0)
     r = fs.analyze(p, _bundle(), embedder=_StubEmbedder(+1.0), finder=_StubFinder(found=30))

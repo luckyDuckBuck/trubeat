@@ -77,7 +77,11 @@ the pulse check no longer decides; otherwise the pulse check keeps its
 old role. `decided_by` is "provenance" | "ai_video" | "face_swap" (the
 detector) | "pulse" (the pulse check) | "". The AI-video layer skips
 title cards (`aigen.guarded_segments`, `W_GRAPHICS_SKIPPED`,
-`E_GRAPHICS_ONLY`).
+`E_GRAPHICS_ONLY`). The detector's numbers travel as `fsd_*` fields;
+2026-11-07 added `fsd_outside_fpr`, the share of real non-FaceForensics
+faces it flagged in gate 4 (from `bundle["gate4"]`), quoted whenever an
+evidence-only flag is shown. The installed bundle is evidence only
+(docs/12 §9).
 
 Since 2026-11-06 `analyze_video` takes an optional
 `progress(fraction, stage)` callback: the web app's progress bar follows
@@ -198,6 +202,7 @@ def cnn_weights_path(bundle) -> Path | None  # stage-2 weights whose SHA-256 mat
 def fetch_cnn_weights(bundle) -> Path        # `trubeat fetch-models`: download + SHA-256 check
 # bundle["mode"] (decisive | evidence) is written only by `scripts/train_faceswap.py ship`,
 # which applies docs/12 §6 to gates 1-3 (Colab) and gate 4 (scripts/check_faceswap_reals.py)
+# and records the gate-4 result as bundle["gate4"] = {k, n, rate, ci, passed, bundle_sha256, ...}
 ```
 
 ## 5. Key design numbers

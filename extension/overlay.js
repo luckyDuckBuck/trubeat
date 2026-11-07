@@ -32,8 +32,10 @@
     "Checks for AI-generated video (trained on 21 generator families; in tests it " +
     "caught about 4 in 5 clips from 2024-era tools, about half from the " +
     "newest, and wrongly flagged about 5% of real videos) and, weakly, for " +
-    "face-swaps. Blind to reenactment fakes (Face2Face, NeuralTextures). " +
-    "'No sign of AI generation' is not proof a video is real.";
+    "face-swaps: the pulse check catches about a quarter of Deepfakes-style " +
+    "swaps and is blind to reenactment fakes (Face2Face, NeuralTextures); the " +
+    "face-swap detector is evidence only (it flagged 38% of real faces outside " +
+    "its training data). 'No sign of AI generation' is not proof a video is real.";
 
   // Exposed for the automated tests (tests/js/extension_test.mjs).
   globalThis.__trueBeatVerdictStyles = VERDICT_STYLE;
@@ -164,7 +166,12 @@
         rows.push([
           "face-swap detector",
           "score " + num(r.fsd_score, 2) + " (flags at " + num(r.fsd_threshold, 2) + ")" +
-            (r.fsd_mode === "decisive" ? "" : ", evidence only") +
+            (r.fsd_mode === "decisive"
+              ? ""
+              : ", evidence only" +
+                (r.fsd_outside_fpr != null
+                  ? " (flagged " + Math.round(r.fsd_outside_fpr * 100) + "% of real faces outside its training data)"
+                  : "")) +
             (r.fsd_n_sampled ? "; face in " + r.fsd_n_faces + " of " + r.fsd_n_sampled + " frames" : ""),
         ]);
       }

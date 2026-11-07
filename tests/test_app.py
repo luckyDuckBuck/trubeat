@@ -163,6 +163,7 @@ def test_caveat_states_the_measured_envelope():
     assert "21 generator families" in c and "reports/aigen_detector_v2.md" in c
     assert "5%" in c and "under 2 s" in c  # measured false-alarm rate, scope
     assert "Face2Face" in c and "NeuralTextures" in c
+    assert "evidence only" in c and "38%" in c  # the face-swap detector (docs/12 §9)
     assert "not proof" in c
 
 
@@ -264,6 +265,20 @@ def test_integration_short_video_gets_an_ai_verdict(tmp_path, monkeypatch):
     assert a.ai_available and a.ai_label in ("ai", "real")
     assert a.verdict in ("fake", "real")
     assert a.decided_by == "ai_video"
+
+
+def test_malformed_face_swap_bundle_fails_the_layer_not_the_app(tmp_path, monkeypatch):
+    # review 2026-11-07: bundle fields read after scoring must not escape the layer's guard
+    from trubeat import faceswap
+
+    res = faceswap.FaceSwapResult(score=2.0, threshold=1.0, label="swap", n_sampled=16, n_faces=16)
+    monkeypatch.setattr(faceswap, "analyze", lambda *a, **k: res)
+    bad = {"mode": "evidence", "config": {}, "gate4": "not a dict"}
+    monkeypatch.setattr(app_mod, "load_faceswap", lambda path=None: (bad, object(), object()))
+    a = _analysis(fsd_available=False)
+    app_mod._face_swap_layer(a, tmp_path / "clip.mp4", None)
+    assert a.layers["face_swap"].startswith("failed") and not a.fsd_available
+    assert "W_FACESWAP_DETECTOR_FAILED" in a.warnings
 
 
 def test_integration_missing_file_is_inconclusive_not_a_crash(tmp_path):
@@ -430,6 +445,43 @@ def test_evidence_only_detector_never_decides():
     assert "passed" not in a.detail and "could run" not in a.detail
     b = verdict_for(_fsd("swap", 1.4, mode="evidence", detector_score=0.5), THR)  # pulse passed too
     assert "does flag the face" in b.detail and "pulse" not in b.detail
+
+
+def test_evidence_only_flag_states_the_measured_outside_false_alarm_rate():
+    # docs/12 §9: gate 4 measured 38% on real non-FaceForensics faces; a flag must say so
+    a = verdict_for(_fsd("swap", 1.4, mode="evidence", fsd_outside_fpr=0.383), THR)
+    assert a.verdict == "real" and "flagged 38% of faces" in a.detail
+    assert "means little" in a.detail
+
+
+def test_shipped_face_swap_bundle_mode_follows_its_recorded_gates():
+    # the packaged bundle is tracked in git, so this runs on every checkout and in CI
+    from trubeat import faceswap
+    b = faceswap.load_bundle(Path(app_mod.__file__).parent / "models" / "faceswap.joblib")
+    assert b is not None, "src/trubeat/models/faceswap.joblib is missing"
+    g4 = b.get("gate4")
+    assert isinstance(g4, dict), "the bundle was not installed by `train_faceswap.py ship`"
+    assert g4["n"] >= 200 and 0.0 <= g4["rate"] <= 1.0
+    decisive = all(ok is not False for _, ok, _ in b["gates"]) and g4["passed"]
+    assert b["mode"] == ("decisive" if decisive else "evidence")  # docs/12 §6
+
+
+def test_caveats_quote_the_shipped_bundles_false_alarm_rate():
+    # CAVEAT and the extension's standing caveat state the gate-4 rate in words;
+    # re-shipping a bundle with another rate must update both (docs/12 §9)
+    from trubeat import faceswap
+    b = faceswap.load_bundle(Path(app_mod.__file__).parent / "models" / "faceswap.joblib")
+    rate = f"{b['gate4']['rate']:.0%}"
+    overlay = (Path(__file__).parents[1] / "extension" / "overlay.js").read_text()
+    if b["mode"] == "evidence":
+        assert rate in app_mod.CAVEAT and rate in overlay
+
+
+def test_pulse_decided_swap_states_what_the_evidence_only_detector_saw():
+    a = verdict_for(_fsd("swap", 2.94, mode="evidence", detector_score=-0.77), THR)
+    assert a.decided_by == "pulse" and "(evidence only) also flags the face (+2.94" in a.detail
+    b = verdict_for(_fsd("no_swap", -0.5, mode="evidence", detector_score=-0.77), THR)
+    assert b.decided_by == "pulse" and "does not flag the face (-0.50" in b.detail
 
 
 def test_face_swap_detail_states_the_bundles_false_alarm_target():

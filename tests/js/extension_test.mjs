@@ -338,6 +338,11 @@ section("2. overlay.js — verdict mapping and copy");
     "caveat names the out-of-scope families",
     /Face2Face/.test(caveat || "") && /NeuralTextures/.test(caveat || "")
   );
+  check(
+    "caveat says the face-swap detector is evidence only, with its measured false alarms",
+    /evidence only/.test(caveat || "") && /38%/.test(caveat || ""),
+    caveat
+  );
 }
 
 section("2c. overlay.js — the result shows the face-swap detector's own numbers");
@@ -381,8 +386,11 @@ section("2c. overlay.js — the result shows the face-swap detector's own number
     check("the pulse score is labelled as the pulse check's", /pulse face-swap score/.test(html), html);
     const ev = show({ verdict: "real", fsd_mode: "evidence", fsd_score: 1.4, fsd_threshold: 0.5 });
     check("an evidence-only detector says so", /flags at 0\.50\), evidence only/.test(ev), ev);
+    const ev2 = show({ verdict: "real", fsd_mode: "evidence", fsd_score: 1.4, fsd_threshold: 0.5,
+                       fsd_outside_fpr: 0.383 });
+    check("an evidence-only row quotes its measured false alarms", /evidence only \(flagged 38% of real faces/.test(ev2), ev2);
     const none = show({ verdict: "real", ai_score: -1.0, ai_threshold: 1.1 });
-    check("no detector row when it did not run", !/face-swap detector/.test(none), none);
+    check("no detector row when it did not run", !/class="k">face-swap detector/.test(none), none);
   }
 }
 

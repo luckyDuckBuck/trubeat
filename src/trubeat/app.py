@@ -57,9 +57,11 @@ CAVEAT = (
     "newest (Veo 3.1, Sora 2, Kling 2.6) and from some open-source ones, and "
     "wrongly flagged about 5% of real test videos (reports/aigen_detector_v2.md). "
     "Clips under 2 s are not checked. It also reads C2PA Content Credentials "
-    "when present and runs a weak face-swap check (catches about a quarter of "
-    "Deepfakes-style swaps; blind to reenactment fakes such as Face2Face and "
-    "NeuralTextures). 'No sign of AI generation' is not proof a video is real."
+    "when present. Face-swaps: a weak pulse check can decide (it catches about a "
+    "quarter of Deepfakes-style swaps and is blind to reenactment fakes such as "
+    "Face2Face and NeuralTextures); a face-swap detector trained on FaceForensics++ "
+    "is shown as evidence only, because it wrongly flagged 38% of real faces from "
+    "other sources (docs/12). 'No sign of AI generation' is not proof a video is real."
 )
 
 # Analysis is capped so a long upload cannot run for an hour.
@@ -97,7 +99,10 @@ class _ProgressPlan:
         costs = {
             "provenance": 0.1,
             "ai_video": PROGRESS_COST_AI_S if "ai_video" in layers else 0.0,
-            "face_swap": (PROGRESS_COST_FSD_S + n_frames * PROGRESS_COST_FSD_S_PER_FRAME
+            # the face-swap detector reads frames only as far as its last sample (<= max_seconds)
+            "face_swap": (PROGRESS_COST_FSD_S
+                          + (min(n_frames, int(max_seconds * fps)) if fps > 0 else n_frames)
+                          * PROGRESS_COST_FSD_S_PER_FRAME
                           if "face_swap" in layers else 0.0),
             "decode": n_frames * PROGRESS_COST_DECODE_S_PER_FRAME if pulse else 0.0,
             "face": n_tracked * PROGRESS_COST_FACE_S_PER_FRAME,
@@ -196,6 +201,7 @@ class PulseAnalysis:
     fsd_score: float | None = None  # positive = face-swap
     fsd_threshold: float | None = None
     fsd_target_fpr: float | None = None  # share of real faces the threshold lets through
+    fsd_outside_fpr: float | None = None  # docs/12 gate 4: real non-FaceForensics faces it flagged
     fsd_real_percentile: float | None = None
     fsd_n_faces: int = 0
     fsd_n_sampled: int = 0
@@ -278,23 +284,25 @@ def load_faceswap(path: Path | str | None = None):
     if key not in _FS_CACHE:
         try:
             bundle = faceswap.load_bundle(path)
+            cfg = faceswap.merged_config(bundle["config"]) if bundle is not None else None
         except Exception as exc:  # noqa: BLE001 — a broken bundle must not break the app
             print(f"warning: could not load face-swap bundle: {exc}")
             bundle = None
         if bundle is None:
-            _FS_CACHE[key] = (None, None, None)
+            return None, None, None  # not cached: a bundle installed later is picked up
+        if bundle.get("kind") == "cnn":
+            try:
+                emb = faceswap.CNNScorer.from_bundle(bundle)
+            except Exception as exc:  # noqa: BLE001 — weights not fetched: the layer says so
+                print(f"warning: face-swap CNN not usable: {exc}")
+                emb = None
         else:
-            cfg = faceswap.merged_config(bundle["config"])
-            if bundle.get("kind") == "cnn":
-                try:
-                    emb = faceswap.CNNScorer.from_bundle(bundle)
-                except Exception as exc:  # noqa: BLE001 — weights not fetched: the layer says so
-                    print(f"warning: face-swap CNN not usable: {exc}")
-                    emb = None
-            else:
-                emb = faceswap.FaceEmbedder(cfg["backbone"], cfg["feature"], int(cfg["torch_threads"]),
-                                            img_size=int(cfg["crop_size"]))
-            _FS_CACHE[key] = (bundle, emb, faceswap.FaceFinder(cfg))
+            emb = faceswap.FaceEmbedder(cfg["backbone"], cfg["feature"], int(cfg["torch_threads"]),
+                                        img_size=int(cfg["crop_size"]))
+        entry = (bundle, emb, faceswap.FaceFinder(cfg))
+        if emb is None:
+            return entry  # not cached: `trubeat fetch-models` may supply the weights later
+        _FS_CACHE[key] = entry
     return _FS_CACHE[key]
 
 
@@ -412,16 +420,19 @@ def _face_swap_layer(a: PulseAnalysis, path: Path, faceswap_path,
             path, bundle, embedder=emb, finder=finder,
             progress=(lambda f, s: bar("face_swap", f, f"Face-swap detector: {s}")) if bar else None,
         )
+        mode = str(bundle.get("mode", "evidence"))
+        target_fpr = float(faceswap.merged_config(bundle["config"])["target_fpr"])
+        gate4 = bundle.get("gate4") or {}
+        outside = float(gate4["rate"]) if gate4.get("rate") is not None else None
     except ModelMissing as exc:
         a.layers["face_swap"] = f"not available: {exc}"
         a.warnings.append(exc.code)
         return
-    except Exception as exc:  # noqa: BLE001 — the app must not crash
+    except Exception as exc:  # noqa: BLE001 — the app must not crash, even on a malformed bundle
         a.layers["face_swap"] = f"failed: {type(exc).__name__}: {exc}"
         a.warnings.append("W_FACESWAP_DETECTOR_FAILED")
         return
-    a.fsd_mode = str(bundle.get("mode", "evidence"))
-    a.fsd_target_fpr = float(faceswap.merged_config(bundle["config"])["target_fpr"])
+    a.fsd_mode, a.fsd_target_fpr, a.fsd_outside_fpr = mode, target_fpr, outside
     a.fsd_label, a.fsd_score, a.fsd_threshold = res.label, res.score, res.threshold
     a.fsd_real_percentile, a.fsd_n_faces, a.fsd_n_sampled = res.real_percentile, res.n_faces, res.n_sampled
     a.fsd_top_time_s, a.fsd_top_crop = res.top_time_s, res.top_crop
@@ -666,7 +677,7 @@ def verdict_for(analysis: PulseAnalysis, thresholds: VerdictThresholds | None = 
             f"{a.fsd_target_fpr or 0.03:.0%} of real faces cross it)."
         )
         if a.fsd_real_percentile is not None:
-            a.detail += f" That is higher than {a.fsd_real_percentile:.0%} of real faces."
+            a.detail += f" That is higher than {a.fsd_real_percentile:.0%} of its real training faces."
         if a.fsd_top_time_s is not None:
             a.detail += f" The most suspicious face is at {a.fsd_top_time_s:.1f} s (shown below)."
         if a.ai_label == "real":
@@ -685,6 +696,10 @@ def verdict_for(analysis: PulseAnalysis, thresholds: VerdictThresholds | None = 
             "This check is weak: it catches about a quarter of Deepfakes-style "
             "swaps and flags about 2% of real face videos."
         )
+        if a.fsd_available:  # evidence only here (fsd_decides is False on this path)
+            a.detail += (f" The face-swap detector (evidence only) "
+                         f"{'also flags' if a.fsd_label == 'swap' else 'does not flag'} the face "
+                         f"({a.fsd_score:+.2f}, threshold {a.fsd_threshold:+.2f}).")
         if a.ai_label == "real":
             a.detail += " The whole-frame AI-video detector did not flag the clip."
         return a
@@ -695,9 +710,12 @@ def verdict_for(analysis: PulseAnalysis, thresholds: VerdictThresholds | None = 
         if fsd_decides:
             swap = f"The face-swap detector also found no sign of a face-swap ({a.fsd_score:+.2f})."
         elif a.fsd_available and a.fsd_label == "swap":
+            outside = (f": on real videos from outside its training data it flagged "
+                       f"{a.fsd_outside_fpr:.0%} of faces, so this flag alone means little"
+                       if a.fsd_outside_fpr is not None
+                       else ": it is not yet accurate enough to decide on its own")
             swap = (f"The face-swap detector does flag the face ({a.fsd_score:+.2f}, threshold "
-                    f"{a.fsd_threshold:+.2f}), but it is shown as evidence only: it is not yet "
-                    "accurate enough to decide on its own. Look closer at the face.")
+                    f"{a.fsd_threshold:+.2f}), but it is shown as evidence only{outside}.")
         elif a.fsd_available:
             swap = (f"The face-swap detector (evidence only) found no sign of a face-swap "
                     f"({a.fsd_score:+.2f}).")
@@ -857,7 +875,8 @@ def build_demo(
         face = None
         if analysis.fsd_top_crop is not None:
             caption = (f"most suspicious face, at {analysis.fsd_top_time_s:.1f} s "
-                       f"(face-swap score {analysis.fsd_score:+.2f})")
+                       f"(face-swap score {analysis.fsd_score:+.2f}"
+                       f"{'' if analysis.fsd_mode == 'decisive' else ', evidence only'})")
             face = [(analysis.fsd_top_crop, caption)]  # a Gallery takes a list
         return (analysis.headline, analysis.detail, evidence, face, _plot(analysis), CAVEAT)
 
@@ -931,6 +950,7 @@ def build_demo(
                     # threshold, so a verdict it decides carries its numbers.
                     **{k: getattr(a, k) for k in (
                         "fsd_mode", "fsd_label", "fsd_score", "fsd_threshold", "fsd_target_fpr",
+                        "fsd_outside_fpr",
                         "fsd_real_percentile", "fsd_n_faces", "fsd_n_sampled", "fsd_top_time_s")},
                     "layers": a.layers,
                     "provenance": a.provenance,
@@ -997,10 +1017,12 @@ def _evidence_text(a: PulseAnalysis) -> str:
         swap_text = "n/a (no model: degraded mode)"
     if a.fsd_available:
         fsd_text = (f"score {a.fsd_score:+.2f} (flags at >= {a.fsd_threshold:+.2f})"
-                    + (f"; higher than {a.fsd_real_percentile:.0%} of real faces"
+                    + (f"; higher than {a.fsd_real_percentile:.0%} of its real training faces"
                        if a.fsd_real_percentile is not None else "")
                     + f"; face in {a.fsd_n_faces} of {a.fsd_n_sampled} frames"
-                    + ("" if a.fsd_mode == "decisive" else "; evidence only"))
+                    + ("" if a.fsd_mode == "decisive" else "; evidence only"
+                       + (f" (flagged {a.fsd_outside_fpr:.0%} of real faces outside its training data)"
+                          if a.fsd_outside_fpr is not None else "")))
     else:
         fsd_text = a.layers.get("face_swap", "not run")
     hr_text = ", ".join(
