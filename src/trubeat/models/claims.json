@@ -8,29 +8,64 @@
   "min_seconds": 2,
   "target_fpr": 0.05,
   "recall": [
-   {"what": "2024-era tools (Sora, Kling, Runway, Luma, Pika)", "k": 831, "n": 1000, "rate": 0.831,
-    "set": "GenBuster-Bench out-of-domain tier (external)"},
-   {"what": "the newest (Veo 3.1, Sora 2, Kling 2.6)", "k": 82, "n": 150, "rate": 0.547,
-    "set": "GenBuster-Bench wild tier (external)"},
-   {"what": "some open-source ones", "k": 522, "n": 1000, "rate": 0.522,
-    "set": "GenBuster-Bench in-domain tier (external)"}
+   {
+    "what": "2024-era tools (Sora, Kling, Runway, Luma, Pika)",
+    "k": 786,
+    "n": 946,
+    "rate": 0.831,
+    "set": "GenBuster-Bench out-of-domain tier (external; near-copies of training clips excluded)"
+   },
+   {
+    "what": "the newest (Veo 3.1, Sora 2, Kling 2.6)",
+    "k": 82,
+    "n": 150,
+    "rate": 0.547,
+    "set": "GenBuster-Bench wild tier (external)"
+   },
+   {
+    "what": "some open-source ones",
+    "k": 522,
+    "n": 1000,
+    "rate": 0.522,
+    "set": "GenBuster-Bench in-domain tier (external)"
+   }
   ],
-  "real_fpr": {"k": 54, "n": 1000, "rate": 0.054, "set": "GenBuster-Bench reals (external)"}
+  "real_fpr": {
+   "k": 53,
+   "n": 996,
+   "rate": 0.053,
+   "set": "GenBuster-Bench reals (external; near-copies of training clips excluded)"
+  },
+  "corrected": "2026-11-07: the ood recall and the GenBuster-real false alarms are counted without the 58 external clips that near-copy training clips (reports/aigen_overlap.md, docs/11 §9.7); no other number changed"
  },
  "dbaa279ad6cbea689ee815fbd22033388a9abdb99c0ec884bfdb8cbcfc420c93": {
   "layer": "pulse",
   "file": "detector.joblib (G2 rPPG-consistency detector)",
   "source": "reports/g2_detector.md; the strict threshold was set on FF++ c23 val reals (n = 30) for 5% and measured once on FF++ c23 test",
   "strict_threshold": -0.605,
-  "recall": {"Deepfakes": 0.24, "FaceSwap": 0.07, "Face2Face": 0.03, "NeuralTextures": 0.0},
-  "real_fpr": {"k": 3, "n": 135, "rate": 0.022, "set": "FF++ c23 test reals"}
+  "recall": {
+   "Deepfakes": 0.24,
+   "FaceSwap": 0.07,
+   "Face2Face": 0.03,
+   "NeuralTextures": 0.0
+  },
+  "real_fpr": {
+   "k": 3,
+   "n": 135,
+   "rate": 0.022,
+   "set": "FF++ c23 test reals"
+  }
  },
  "e0d39bfe13b2cd1b4102b2f1082f1ed0a9a366833d06c60c0f16a39afd47a991": {
   "layer": "face_swap",
   "file": "faceswap.joblib (round 3, docs/12 §9)",
   "source": "docs/12",
   "trained_on": "FaceForensics++",
-  "outside_fpr": {"k": 115, "n": 300, "rate": 0.383,
-                  "set": "GenBuster-Bench + AIGVDBench reals, judged clips (frozen gate-4a list, reports/faceswap_gate4a_round3.md)"}
+  "outside_fpr": {
+   "k": 115,
+   "n": 300,
+   "rate": 0.383,
+   "set": "GenBuster-Bench + AIGVDBench reals, judged clips (frozen gate-4a list, reports/faceswap_gate4a_round3.md)"
+  }
  }
 }

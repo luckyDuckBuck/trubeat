@@ -577,6 +577,17 @@ v2's threshold from out-of-fold pool reals is +1.1149.
 | no tier drops > 3 points | id 52.2%, ood 83.1% | id 49.9%, ood 78.3% | yes |
 | LOGO macro, original 17 families ≥ v1 − 0.01 | 0.819 | 0.809 | yes |
 
+*Correction check (2026-11-07, docs/13 B-03, `scripts/audit_aigen_overlap.py` →
+`reports/aigen_overlap.md`):* 58 external clips are near-copies of pool
+clips (mean-embedding cosine ≥ 0.99): 54 GenBuster ood AI clips that
+AIGVDBench also carries, and 4 GenBuster reals. The group-key check cannot
+see them, because the two benchmarks name clips differently. Without them, with the
+shipped bundle and threshold unchanged: ood recall 786/946 = 83.1%
+[80.6, 85.3] (was 831/1000), GenBuster-real FPR 53/996 = 5.3% [4.1, 6.9]
+(was 54/1000), id and wild recall and every AUC unchanged. As R2-2 found
+for v1, the overlap had no effect; the app now quotes the counts without
+the near-copies (`src/trubeat/models/claims.json`).
+
 Checks on the result, run after the decision and not used for it:
 
 - **Is the wild gain only Veo 3.1 being in training?** No. Without the 10
