@@ -738,7 +738,8 @@ def cmd_extract(a) -> None:
     old = json.loads(lp.read_text()) if lp.is_file() else {"runs": []}
     old["runs"].append({"finished": time.strftime("%Y-%m-%d %H:%M"), "videos": len(rows), "written": n_done,
                         "stopped_early": stopped_early, "with_errors": n_err,
-                        "errors": log_rows[:500], "hevc_encoder": hevc_encoder(), "window_s": cfg["window_s"]})
+                        "errors": log_rows[:500], "hevc_encoder": hevc_encoder(), "window_s": cfg["window_s"],
+                        "devices": devices, "versions": versions()})
     lp.parent.mkdir(parents=True, exist_ok=True)
     lp.write_text(json.dumps(old, indent=1))
     log(f"done: {n_done} videos written, {n_err} with an error in at least one variant (see {lp})")
