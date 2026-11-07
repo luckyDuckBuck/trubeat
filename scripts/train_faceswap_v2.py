@@ -287,13 +287,17 @@ def cmd_fetch(a) -> None:
         report["ffpp_shard"] = a.shard or "all"
         log(f"FaceForensics++ + DFD: {len(jobs)} files (shard {a.shard or 'all'})")
         missing = []
+        t0, nbytes = time.time(), 0
         with ThreadPoolExecutor(a.threads) as ex:
             futs = {ex.submit(tf3.fetch, base + j, root / "ffpp" / j): j for j in jobs}
             for k, f in enumerate(as_completed(futs), 1):
                 if not f.result():
                     missing.append(futs[f])
-                if k % 1000 == 0:
-                    log(f"  {k}/{len(jobs)} ({len(missing)} missing)")
+                else:
+                    nbytes += (root / "ffpp" / futs[f]).stat().st_size
+                if k % 100 == 0 or k == len(jobs):
+                    dt = max(time.time() - t0, 1e-9)
+                    log(f"  {k}/{len(jobs)} ({len(missing)} missing, {nbytes / 1e9:.2f} GB, {nbytes / 1e6 / dt:.1f} MB/s)")
         report["ffpp"] = {"files": len(jobs), "missing": len(missing), "missing_list": missing[:200]}
         log(f"FaceForensics++ + DFD: {len(jobs) - len(missing)}/{len(jobs)} present")
     links = json.loads(Path(a.links).read_text()) if a.links else {}
