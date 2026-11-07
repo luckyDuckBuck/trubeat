@@ -564,6 +564,103 @@ recorded as not applicable and the caveat says what was not measured. Any
 other change is a dated revision in this section before the re-check, as
 docs/12 §6 did.
 
+### 6.6 Revisions (2026-11-07, recorded before any cloud result)
+
+Made while implementing. No cloud session had produced a feature when
+these were written (the only sessions so far were cancelled while
+downloading, item 10). The local smoke run (60 FF++ clips) only checked
+that the pipeline runs end to end; its numbers mean nothing at that size
+and decided nothing here.
+
+1. **Selection in two stages (§6.2 Grid, Choice).** Every cell × repeated
+   folds × LOPSO is ~3,400 logistic fits on up to ~48k rows, too slow for
+   one 4-vCPU session. **Stage A** picks the representation (backbone ×
+   feature × C) by LOMO macro AUC on the base set (v0 + c40), repeated
+   group folds 3 × 5 (seeds 7, 11, 13); candidates within 0.01 of the best
+   go on, at most 4. **Stage B** scores each kept representation with each
+   training set (base, video, video+crop) by LOPSO (one fold assignment,
+   seed 7) and by LOMO on that training set. The §6.2 choice rule then
+   applies to the stage-B cells unchanged.
+2. **LOMO is scored on the held-out fold's v0 rows** (fits use every row
+   of the training set), so the training sets are compared on the same
+   rows.
+3. **LOPSO sources** are v0 (c23), c40 and v1–v4 (no OpenVid, item 9).
+   Crop-augmented rows are training material, not a processing source:
+   they never set a threshold and are never counted.
+4. **Threshold:** the 97% quantile of the chosen cell's out-of-fold reals,
+   each processing source weighted equally, augmented rows excluded.
+5. **Sample weights:** every (label, processing source) cell carries the
+   same total weight in every fit, so processing carries no label
+   information (§3.2's principle, made explicit).
+6. **Faces are found on each variant's own frames** (§3.2 said: once on
+   v0, boxes reused). The app runs the finder on the processed video, so
+   this measures what the app will do, including finding fewer faces in
+   degraded video. Measured cost: 2–3 s per video for all variants.
+7. **Window:** every variant is cut from the first 20 s and its frames
+   are sampled there (`window_s`); the app samples within the first
+   120 s. FF++ originals have a median length of 16.9 s (308 local
+   originals; 34% are longer than 20 s), so most training clips are seen
+   whole.
+8. **Encoders:** v2 uses hevc_nvenc (constant QP 30) where a session has an
+   NVIDIA encoder, else libx265 `ultrafast` CRF 28 (the CPU sessions of
+   item 10), else libx264 CRF 26; v3 is libvpx-vp9 in real-time mode
+   (cpu-used 8, 2.5 Mb/s), as a browser records. The encoder is stored per
+   video and variant.
+9. **No OpenVid-1M reals.** GenBuster-Bench's reals most likely come from
+   OpenVid-1M; training on other clips of the same source videos would make
+   gate 4a partly in-distribution in a way the 0.97 dedupe cannot rule out.
+   The training reals stay FF++ originals, as in round 3.
+10. **Where K1 runs (§7, Appendix C).** Measured: one FF++ video with all
+    six variants costs ~13 s on the laptop (Appendix C assumed ~1.5 s per
+    re-encode), ~16 h for one 4-vCPU Kaggle session. Kaggle allows two GPU
+    batch sessions at once, and it **cancelled every session that started
+    downloading FF++ videos from the TUM server**: three GPU runs (12 and 4
+    connections) and one CPU-only run, each within about a minute of the
+    first video request, with no failure message (setup, model downloads,
+    and the small FF++ index files went through; the user did not cancel
+    and the account's phone is verified). Colab flagged the same work in
+    round 3. So **K1** (FF++ c23 + c40 and 450 DFD clips: download, faces,
+    variants, embeddings, stage-2 crops) **runs on the laptop**, the user's
+    choice, started when the user says the laptop is free. The files go
+    into `data/raw/ffpp` with the user's FF++ access (human gate 3). Faces,
+    variants and crops run on the CPU, and B/16 embeddings on the laptop's
+    GTX 1650. **K1b** (DF40, Celeb-DF v2, UADFV from Google Drive; v0 only)
+    stays on Kaggle; if Kaggle cancels it too, it moves to the laptop,
+    streamed so the disk holds. **Selection (K2) runs on the laptop**, on
+    K1's features plus K1b's features pulled from Kaggle (embeddings only,
+    never videos). The Kaggle code shards by a stable hash of the video id
+    (`fetch --shard`; DFD actor groups are recomputed over the whole
+    manifest), so a K1 shard can still run anywhere.
+11. **L/14 leaves the grid.** CLIP L/14 costs ~4.6× B/16 per crop: about
+    9 h for FF++'s ~825k crops on the GTX 1650 alone, and the app would run
+    ~4× slower with it. The grid is backbone {B/16} × feature {CLS,
+    CLS+patch} × C {0.01, 0.1, 1} × training set {base, video, video+crop}.
+12. **torch:** the laptop's app environment keeps torch 2.15.0+cpu; the
+    laptop's K1 embeddings run torch 2.15.0 (CUDA build) in a separate
+    environment under `runs/`; K1b's GPU session runs PyPI's 2.15.0 (CUDA
+    13.2) when it runs on the GPU, else 2.14.1+cu126. Each
+    `extract_log.json` records the versions and devices. The laptop gates
+    (4a, the RepresentUs clip, `user_eval`) recompute embeddings on the
+    laptop's CPU, so a GPU/CPU difference cannot hide.
+13. **Dedupe (§3.2).** In `select`, before any fit, each DF40 training clip
+    is compared with every held-out clip in the cloud features (FF++
+    test, Celeb-DF, DF40 test and on Celeb-DF, DFD, UADFV) on its mean v0
+    face embedding (B/16 CLS); cosine ≥ 0.97 removes it. Calibration on face
+    crops (60 FF++ smoke clips, 1,770 pairs): unrelated clips peak at 0.93
+    (median 0.58), clips cut from one video reach 0.97–0.99, so the cut
+    keeps its meaning. Against gate 4a the comparison runs on the laptop,
+    because those clips never leave it: `train_faceswap_v2.py overlap`
+    compares the DF40 training embeddings that `select` exports with the
+    gate-4a clips; any hit is excluded and selection reruns (`select
+    --exclude`) before gate 4a is measured with v2. Content hashes are not
+    compared: every DF40 clip is a generated fake, so none can be
+    byte-identical to a reference clip.
+14. **Round-3 reference on the frozen list** (for the §6.3 interval rule),
+    measured before any v2 result: `reports/faceswap_gate4a_round3.md`,
+    115 / 300 judged = 38.3% [33.0%, 43.9%] (706 processed; AIGVDBench
+    9 / 142, GenBuster 106 / 158). This reproduces round 3's gate-4 count
+    exactly.
+
 ---
 
 ## 7. Order of work

@@ -1,0 +1,40 @@
+{
+ "bundle": "src/trubeat/models/faceswap.joblib",
+ "bundle_sha256": "e0d39bfe13b2cd1b4102b2f1082f1ed0a9a366833d06c60c0f16a39afd47a991",
+ "k": 115,
+ "n": 300,
+ "rate": 0.38333333333333336,
+ "ci": [
+  0.33011889302772734,
+  0.4394979073050777
+ ],
+ "passed": false,
+ "rule": "<= 3% of judged, n judged >= 200, no source above 6%",
+ "per_source": {
+  "aigvdbench": {
+   "k": 9,
+   "n": 142,
+   "rate": 0.06338028169014084,
+   "ci": [
+    0.03369928920254133,
+    0.11606319283276273
+   ],
+   "processed": 391
+  },
+  "genbuster_id": {
+   "k": 106,
+   "n": 158,
+   "rate": 0.6708860759493671,
+   "ci": [
+    0.59432125229959,
+    0.7393383259547031
+   ],
+   "processed": 315
+  }
+ },
+ "n_processed": 706,
+ "n_scored": 706,
+ "n_not_judged_error": 0,
+ "frozen_manifest": "faceswap_gate4a.csv",
+ "created": "2026-11-07 11:42"
+}
