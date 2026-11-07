@@ -306,10 +306,22 @@ def cmd_fetch(a) -> None:
         ids = links.get("df40_ids") or {}
         if not ids:
             raise SystemExit("DF40 needs --links with df40_ids (zip path -> Drive file id)")
-        rng = np.random.default_rng(int(cfg["seed"]))
-        plan = plan_df40(cfg, ids, split_of, rng)
-        report["df40"] = {}
+        plan_path = Path(a.df40_plan) if a.df40_plan else None
+        if plan_path is not None and plan_path.is_file():   # the same picks on every call (zip-by-zip runs)
+            plan = json.loads(plan_path.read_text())
+        else:
+            rng = np.random.default_rng(int(cfg["seed"]))
+            plan = plan_df40(cfg, ids, split_of, rng)
+            if plan_path is not None:
+                plan_path.parent.mkdir(parents=True, exist_ok=True)
+                plan_path.write_text(json.dumps(plan, indent=1))
+        if a.plan_only:
+            log(f"DF40 plan: {sum(len(v) for v in plan.values())} videos from {len(plan)} zips -> {plan_path}")
+            return
+        report["df40"] = report.get("df40", {})
         for key, members in plan.items():
+            if a.only and key not in a.only:
+                continue
             ok, failed = fetch_zip_members(drive_url(ids[key]), members, root / "df40" / key.replace(".zip", ""))
             report["df40"][key] = {"planned": len(members), "fetched_now": ok, "failed": failed[:50]}
             log(f"  DF40 {key}: {len(members) - len(failed)}/{len(members)} present")
@@ -330,6 +342,8 @@ def cmd_fetch(a) -> None:
         log(f"Celeb-DF v2: {len(want) - len(failed)}/{len(want)} present")
     out = root / "fetch_report.json"
     old = json.loads(out.read_text()) if out.is_file() else {}
+    if isinstance(old.get("df40"), dict) and "df40" in report:   # zip-by-zip runs add to earlier zips
+        old["df40"].update(report.pop("df40"))
     old.update(report)
     out.write_text(json.dumps(old, indent=1))
 
@@ -453,17 +467,28 @@ def cmd_manifest(a) -> None:
         rows += manifest_df40(Path(a.df40), Path(a.ffpp))
     if a.cdf2:
         rows += manifest_cdf2(Path(a.cdf2))
-    df = pd.DataFrame(rows)
-    if "cdf_set" not in df:
-        df["cdf_set"] = ""
+    finish_manifest(rows, Path(a.out))
+
+
+MANIFEST_COLUMNS = ("video_id", "dataset", "family", "label", "path", "path_c40", "split", "group", "source_id",
+                    "cdf_set")
+
+
+def finish_manifest(rows: list[dict], out: Path) -> pd.DataFrame:
+    """Rows -> the manifest CSV: files that exist, c40 twins that exist, the
+    leakage check (AGENTS.md §6), every column present."""
+    df = pd.DataFrame(rows, columns=list(MANIFEST_COLUMNS))
     df["cdf_set"] = df["cdf_set"].fillna("")
-    df = df[df.path.map(lambda p: Path(p).is_file())].reset_index(drop=True)
-    df["path_c40"] = df.path_c40.where(df.path_c40.map(lambda p: bool(p) and Path(p).is_file()), "")
+    df = df[df.path.map(lambda p: Path(str(p)).is_file()).astype(bool)].reset_index(drop=True)
+    df["path_c40"] = df.path_c40.fillna("")
+    df["path_c40"] = df.path_c40.where(df.path_c40.map(lambda p: bool(p) and Path(p).is_file()).astype(bool), "")
     check_manifest_v2(df)
-    Path(a.out).parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(a.out, index=False)
-    log(f"{len(df)} videos -> {a.out}")
-    print(df.groupby(["dataset", "split", "label"]).size().to_string())
+    out.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(out, index=False)
+    log(f"{len(df)} videos -> {out}")
+    if len(df):
+        print(df.groupby(["dataset", "split", "label"]).size().to_string())
+    return df
 
 
 # ------------------------------------------------------------------ variants ---
@@ -1434,6 +1459,9 @@ def main() -> None:
     f.add_argument("--dfd-fake", type=int, default=300)
     f.add_argument("--threads", type=int, default=8)
     f.add_argument("--shard", default=None, help="I/N: fetch only shard I of N of the FF++ and DFD videos")
+    f.add_argument("--df40-plan", default=None, help="JSON of the DF40 picks: written on first use, then reused")
+    f.add_argument("--only", nargs="*", default=None, help="fetch only these DF40 zips (e.g. train/simswap.zip)")
+    f.add_argument("--plan-only", action="store_true", help="write the DF40 plan (--df40-plan) and stop")
     f.add_argument("--links", default=None, help="JSON with df40_ids and cdf2_id (kept out of the repo)")
     f.add_argument("--config", default=None)
     m = sub.add_parser("manifest")

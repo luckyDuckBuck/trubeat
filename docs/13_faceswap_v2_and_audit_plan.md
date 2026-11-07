@@ -610,38 +610,40 @@ and decided nothing here.
    OpenVid-1M; training on other clips of the same source videos would make
    gate 4a partly in-distribution in a way the 0.97 dedupe cannot rule out.
    The training reals stay FF++ originals, as in round 3.
-10. **Where K1 runs (§7, Appendix C).** Measured: one FF++ video with all
-    six variants costs ~13 s on the laptop (Appendix C assumed ~1.5 s per
-    re-encode), ~16 h for one 4-vCPU Kaggle session. Kaggle allows two GPU
-    batch sessions at once, and it **cancelled every session that started
-    downloading FF++ videos from the TUM server**: three GPU runs (12 and 4
-    connections) and one CPU-only run, each within about a minute of the
-    first video request, with no failure message (setup, model downloads,
-    and the small FF++ index files went through; the user did not cancel
-    and the account's phone is verified). Colab flagged the same work in
-    round 3. So **K1** (FF++ c23 + c40 and 450 DFD clips: download, faces,
-    variants, embeddings, stage-2 crops) **runs on the laptop**, the user's
-    choice, started when the user says the laptop is free. The files go
-    into `data/raw/ffpp` with the user's FF++ access (human gate 3). Faces,
-    variants and crops run on the CPU, and B/16 embeddings on the laptop's
-    GTX 1650. **K1b** (DF40, Celeb-DF v2, UADFV from Google Drive; v0 only)
-    stays on Kaggle; if Kaggle cancels it too, it moves to the laptop,
-    streamed so the disk holds. **Selection (K2) runs on the laptop**, on
-    K1's features plus K1b's features pulled from Kaggle (embeddings only,
-    never videos). The Kaggle code shards by a stable hash of the video id
-    (`fetch --shard`; DFD actor groups are recomputed over the whole
-    manifest), so a K1 shard can still run anywhere.
+10. **Everything runs on the laptop (§7, Appendix C).** Measured: one FF++
+    video with all six variants costs ~13 s on the laptop (Appendix C
+    assumed ~1.5 s per re-encode), ~16 h for one 4-vCPU Kaggle session,
+    so the Kaggle code shards by a stable hash of the video id (`fetch
+    --shard`; DFD actor groups are recomputed over the whole manifest).
+    Kaggle then **cancelled all five sessions of this pipeline**
+    (CANCEL_ACKNOWLEDGED, no failure message, 1–4 min after start): three
+    GPU and one CPU-only run at the start of the FF++ download, and the
+    DF40/Celeb-DF run while it was only listing zip contents on Google
+    Drive. The user did not cancel, and the account's phone is verified. A
+    small probe kernel without this code ran normally earlier the same day.
+    So the cause is not the TUM server; most likely it is Kaggle's
+    automated moderation of the code, as Colab flagged the round-3
+    notebook. The code is not renamed or disguised to get past it. **Every
+    step runs on the laptop** (`scripts/run_fsv2_local.py`), the user's
+    choice, started when the user says the laptop is free:
+    - FF++ c23 + c40 and 450 DFD clips go into `data/raw/ffpp` with the
+      user's FF++ access (human gate 3).
+    - DF40 and UADFV are streamed zip by zip through `runs/` (fetch,
+      extract, delete), so the disk holds. Celeb-DF v2's test list and
+      reals go into `data/raw/cdf2`.
+    - Faces, variants and crops run on the CPU (Ryzen 5 4600H). B/16
+      embeddings run on the GTX 1650.
+    - Selection runs on the CPU in the app's environment.
 11. **L/14 leaves the grid.** CLIP L/14 costs ~4.6× B/16 per crop: about
     9 h for FF++'s ~825k crops on the GTX 1650 alone, and the app would run
     ~4× slower with it. The grid is backbone {B/16} × feature {CLS,
     CLS+patch} × C {0.01, 0.1, 1} × training set {base, video, video+crop}.
-12. **torch:** the laptop's app environment keeps torch 2.15.0+cpu; the
-    laptop's K1 embeddings run torch 2.15.0 (CUDA build) in a separate
-    environment under `runs/`; K1b's GPU session runs PyPI's 2.15.0 (CUDA
-    13.2) when it runs on the GPU, else 2.14.1+cu126. Each
-    `extract_log.json` records the versions and devices. The laptop gates
-    (4a, the RepresentUs clip, `user_eval`) recompute embeddings on the
-    laptop's CPU, so a GPU/CPU difference cannot hide.
+12. **torch:** the app's environment keeps torch 2.15.0+cpu. Extraction
+    runs torch 2.15.0's CUDA build in a separate environment under `runs/`
+    holding the same versions of every other package. Each
+    `extract_log.json` records the versions and devices. The gates on the
+    laptop (4a, the RepresentUs clip, `user_eval`) recompute embeddings on
+    the CPU, so a GPU/CPU difference cannot hide.
 13. **Dedupe (§3.2).** In `select`, before any fit, each DF40 training clip
     is compared with every held-out clip in the cloud features (FF++
     test, Celeb-DF, DF40 test and on Celeb-DF, DFD, UADFV) on its mean v0
