@@ -467,6 +467,26 @@ paths and the cloud run uses it. If it fails, the round continues with the
 old finder and the failure is recorded; the small-face item returns in the
 next plan.
 
+*Revision (2026-11-07, before the full check; after a 6-clip dry run of
+`scripts/check_facefind.py`, recorded as docs/12 §6 did):*
+
+- *Rule 1's 30 px size is reported, not required: `min_face_px` (40, in
+  the same config) makes both finders ignore faces under 40 px by design,
+  so the size could never pass. The other sizes and both canvases stay
+  required at ≥ 95%.*
+- *Implementation, not a rule: the dry run showed landmarks taken on a crop
+  differing from whole-frame landmarks by more than 5% of the face size in
+  a third of frames (rule 3). The finder now runs the round-3 pass first
+  and uses YuNet + crop only when that pass finds nothing, so every
+  round-3 crop is reproduced exactly. Synthetic scenes are now face-free
+  (the background frame's own faces filled flat and checked absent): the
+  first version pasted faces into frames that already held a larger face,
+  which the finder correctly returned.*
+- *Scope: the finder is adopted for the face-swap detector only. The pulse
+  path keeps its tracker, because its decisive threshold (−0.605) was
+  measured with that tracker; feeding it small faces it never saw would
+  change what the threshold means.*
+
 ### 6.2 Detector v2 selection and threshold (train + val only)
 
 - **Grid:** backbone {B/16, L/14} × feature {CLS, CLS+patch} × C {0.01,

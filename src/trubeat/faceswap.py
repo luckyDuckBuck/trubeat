@@ -31,6 +31,7 @@ from pathlib import Path
 import numpy as np
 
 from .errors import ModelMissing, ShortVideo, UnreadableVideo
+from .facefind import FINDER_DEFAULTS, TwoPassFinder, square_box
 
 DEFAULT_CONFIG: dict = {
     "n_frames": 16,
@@ -45,8 +46,14 @@ DEFAULT_CONFIG: dict = {
     "feature": "cls",
     "torch_threads": 4,
     "target_fpr": 0.03,
+    # "landmarker": the round-3 finder (the Face Landmarker on the whole
+    # frame); bundles without this key were trained with it and keep it.
+    # "twopass": YuNet + the Landmarker on a crop (docs/13 §3.1).
+    "finder": "landmarker",
+    **FINDER_DEFAULTS,
 }
 FEATURES = ("cls", "cls+patch")
+FINDERS = ("landmarker", "twopass")
 BUNDLE_SEARCH_PATHS = [
     Path("models/faceswap.joblib"),
     Path("data/models/faceswap.joblib"),
@@ -67,13 +74,21 @@ def merged_config(config: dict | None) -> dict:
     out.update(config or {})
     if out["feature"] not in FEATURES:
         raise ValueError(f"feature must be one of {FEATURES}, got {out['feature']!r}")
+    if out["finder"] not in FINDERS:
+        raise ValueError(f"finder must be one of {FINDERS}, got {out['finder']!r}")
     return out
 
 
+# Runtime knobs that never change a score (left out of the hash).
+_RUNTIME_KEYS = ("torch_threads",)
+
+
 def config_hash(config: dict) -> str:
-    keys = ("n_frames", "max_seconds", "min_faces", "max_faces", "crop_scale", "crop_size",
-            "min_face_px", "backbone", "feature")
+    """Hash of every setting that changes a crop, a feature or the
+    threshold (docs/13 B-08): sampling, finder, crop geometry, backbone,
+    feature, minimum length and the target false-alarm rate."""
     cfg = merged_config(config)
+    keys = sorted(k for k in DEFAULT_CONFIG if k not in _RUNTIME_KEYS)
     return hashlib.sha256(json.dumps({k: cfg[k] for k in keys}, sort_keys=True).encode()).hexdigest()[:8]
 
 
@@ -177,13 +192,6 @@ class FaceCrop:
     box: tuple[int, int, int, int]   # x0, y0, side, side in native pixels
 
 
-def square_box(xs: np.ndarray, ys: np.ndarray, scale: float) -> tuple[float, float, float]:
-    """(centre x, centre y, side) of the square ``scale`` x the bounding box."""
-    x0, x1, y0, y1 = float(xs.min()), float(xs.max()), float(ys.min()), float(ys.max())
-    side = max(x1 - x0, y1 - y0) * scale
-    return (x0 + x1) / 2.0, (y0 + y1) / 2.0, side
-
-
 def cut_square(rgb: np.ndarray, cx: float, cy: float, side: float, size: int) -> np.ndarray:
     """Square crop centred on (cx, cy), zero-padded where it leaves the
     frame, resized to ``size`` (area interpolation when shrinking)."""
@@ -201,11 +209,16 @@ def cut_square(rgb: np.ndarray, cx: float, cy: float, side: float, size: int) ->
 
 
 class FaceFinder:
-    """MediaPipe Face Landmarker in image mode (one call per sampled frame)."""
+    """The face finder the config names (``finder``): the round-3 Face
+    Landmarker on the whole frame, or the two-pass finder (docs/13 §3.1).
+    ``largest_face(rgb)`` returns the crop box ``(cx, cy, side)`` or None;
+    ``last_seen`` is how many faces the last frame showed."""
 
     def __init__(self, config: dict | None = None) -> None:
         self.cfg = merged_config(config)
         self._lm = None
+        self._two = TwoPassFinder(self.cfg) if self.cfg["finder"] == "twopass" else None
+        self.last_seen = 0
 
     def _load(self):
         from . import face
@@ -223,14 +236,18 @@ class FaceFinder:
             base_options=mp_python.BaseOptions(model_asset_path=str(model_path)),
             running_mode=mp_vision.RunningMode.IMAGE,
             num_faces=int(self.cfg["max_faces"]),
-            min_face_detection_confidence=0.5,
-            min_face_presence_confidence=0.5,
+            min_face_detection_confidence=float(self.cfg["lm_detection_confidence"]),
+            min_face_presence_confidence=float(self.cfg["lm_presence_confidence"]),
         )
         self._mp = mp
         self._lm = mp_vision.FaceLandmarker.create_from_options(opts)
 
     def largest_face(self, rgb: np.ndarray) -> tuple[float, float, float] | None:
         """(cx, cy, side) of the largest face's crop box, or None."""
+        if self._two is not None:
+            box = self._two.largest_face(rgb)
+            self.last_seen = self._two.last_seen
+            return box
         if self._lm is None:
             self._load()
         h, w = rgb.shape[:2]
@@ -245,9 +262,12 @@ class FaceFinder:
                 continue
             if best is None or box[2] > best[2]:
                 best = box
+        self.last_seen = int(best is not None)
         return best
 
     def close(self) -> None:
+        if self._two is not None:
+            self._two.close()
         if self._lm is not None:
             self._lm.close()
             self._lm = None
