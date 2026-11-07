@@ -71,11 +71,24 @@ def need_gb(gb: float, what: str) -> None:
 
 
 def extract(manifest: Path, stage2: bool = False) -> None:
-    cmd = [VPY, TF2, "extract", "--manifest", manifest, "--features-dir", OUT / "features", "--workers", WORKERS,
-           "--device", "cuda", "--backbones", B16]
-    if stage2:
-        cmd += ["--stage2-dir", OUT / "crops380"]
-    run(cmd)
+    """Extract, resuming after a worker died (exit 3: most likely out of
+    memory) with one worker fewer each time; any other failure stops."""
+    workers = WORKERS
+    for attempt in range(4):
+        cmd = [VPY, TF2, "extract", "--manifest", manifest, "--features-dir", OUT / "features", "--workers", workers,
+               "--device", "cuda", "--backbones", B16]
+        if stage2:
+            cmd += ["--stage2-dir", OUT / "crops380"]
+        cmd = [str(c) for c in cmd]
+        log("$ " + " ".join(cmd))
+        code = subprocess.run(cmd, cwd=REPO, check=False).returncode
+        if code == 0:
+            return
+        if code == 3 and attempt < 3:
+            workers = max(1, workers - 1)
+            log(f"extract: a worker process died; resuming with {workers} worker(s)")
+            continue
+        raise SystemExit(f"extract failed (exit {code}) on {manifest.name}")
 
 
 def step_env() -> None:
@@ -96,11 +109,18 @@ def step_env() -> None:
     req = OUT / "venv_cuda_requirements.txt"
     req.parent.mkdir(parents=True, exist_ok=True)
     req.write_text("\n".join(pins) + "\n")
-    run(["uv", "pip", "install", "-q", "-p", VPY, "torch==2.15.0"] + ([f"torchvision=={tv}"] if tv else ["torchvision"]))
     run(["uv", "pip", "install", "-q", "-p", VPY, "-r", req])
     run(["uv", "pip", "install", "-q", "-p", VPY, "--no-deps", "-e", REPO])
     run(["uv", "pip", "install", "-q", "-p", VPY, "remotezip"])      # range reads of the DF40 / Celeb-DF zips
-    run([VPY, "-c", check])
+    # torch 2.15.0 (the app's version; PyPI's build is CUDA 13.2), else 2.14.1+cu126 for an older driver
+    for spec, idx in ((["torch==2.15.0"] + ([f"torchvision=={tv}"] if tv else ["torchvision"]), []),
+                      (["torch==2.14.1", "torchvision"], ["--index-url", "https://download.pytorch.org/whl/cu126"])):
+        run(["uv", "pip", "install", "-q", "-p", VPY, *spec, *idx])
+        if subprocess.run([str(VPY), "-c", check], cwd=REPO, check=False).returncode == 0:
+            log(f"env: torch {spec[0]} runs on the GPU")
+            return
+        log(f"env: {spec[0]} cannot run on this GPU; trying the next build")
+    raise SystemExit("no torch build runs on this GPU")
 
 
 def step_ffpp() -> None:
@@ -121,25 +141,47 @@ def step_df40() -> None:
              "--plan-only"])
     plan = json.loads(plan_path.read_text())
     log(f"DF40 plan: {sum(len(v) for v in plan.values())} videos from {len(plan)} zips")
+    incomplete = []
     for key, members in plan.items():
         tag = key.replace("/", "_").removesuffix(".zip")
         done = OUT / "manifests" / f"df40_{tag}.done"
         if done.is_file():
             continue
         zdir = TMP / "df40" / key.removesuffix(".zip")
+        missing: list[str] = []
+        failed: list[str] = []
         if members:
             need_gb(8, key)
-            run([VPY, TF2, "fetch", "--root", TMP, "--datasets", "df40", "--links", LINKS,
-                 "--df40-plan", plan_path, "--only", key])
+            for attempt in range(3):      # Drive may refuse reads for a while (503): pause and fetch again
+                run([VPY, TF2, "fetch", "--root", TMP, "--datasets", "df40", "--links", LINKS,
+                     "--df40-plan", plan_path, "--only", key])
+                missing = [m for m in members if not (zdir / m).is_file()]
+                if not missing:
+                    break
+                log(f"DF40 {key}: {len(missing)} of {len(members)} planned clips missing; retry in {60 * 3 ** attempt} s")
+                time.sleep(60 * 3 ** attempt)
             man = OUT / "manifests" / f"df40_{tag}.csv"
             rows = [r for r in t.manifest_df40(TMP / "df40", DATA / "ffpp") if str(zdir) in r["path"]]
             df = t.finish_manifest(rows, man)
             if len(df):
                 extract(man)
+            for r in df.itertuples(index=False):   # delete each clip once its features are complete
+                if t.extracted_v2(OUT / "features", r.video_id, [B16]):
+                    Path(r.path).unlink(missing_ok=True)
+                else:
+                    failed.append(r.video_id)
+        if missing or failed:   # kept on disk and not marked done: a rerun of this step retries them
+            incomplete.append({"zip": key, "missing": len(missing), "not_extracted": len(failed)})
+            log(f"DF40 {key}: NOT done ({len(missing)} clips missing, {len(failed)} not fully extracted); "
+                "rerun the df40 step to retry")
+            continue
         if zdir.is_dir():
             shutil.rmtree(zdir)   # a streaming cache under runs/, never data/raw
         done.write_text(f"{len(members)} planned\n")
         log(f"DF40 {key}: done")
+    (OUT / "df40_incomplete.json").write_text(json.dumps(incomplete, indent=1))
+    if incomplete:
+        log(f"DF40: {len(incomplete)} zips incomplete (runs/fsv2/local/df40_incomplete.json); rerun the df40 step")
 
 
 def step_cdf2() -> None:
@@ -152,8 +194,9 @@ def step_cdf2() -> None:
 
 def step_select() -> None:
     parts = sorted((OUT / "manifests").glob("*.csv"))
-    m = pd.concat([pd.read_csv(f, dtype=str, keep_default_na=False) for f in parts]).drop_duplicates("video_id")
-    m = m.fillna("")
+    m = pd.concat([pd.read_csv(f, dtype=str, keep_default_na=False) for f in parts]).fillna("")
+    # no de-duplication here: the parts are disjoint by construction, and select's leakage check
+    # (check_manifest_v2) fails on any video id listed twice
     allm = OUT / "manifest_all.csv"
     m.to_csv(allm, index=False)
     log(f"manifest: {len(m)} videos from {len(parts)} parts")

@@ -153,6 +153,7 @@ def main() -> None:
         "bundle": args.bundle, "bundle_sha256": bsha, "k": k, "n": n, "rate": k / max(n, 1), "ci": [lo, hi],
         "passed": passed, "rule": rule, "per_source": per, "n_processed": len(df), "n_scored": len(df),
         "n_not_judged_error": len(errors), "frozen_manifest": Path(args.manifest).name if args.manifest else None,
+        "frozen_manifest_sha256": sha256(Path(args.manifest)) if args.manifest else None,
         "created": time.strftime("%Y-%m-%d %H:%M")}, indent=1))
     print("\n".join(L))
 

@@ -140,14 +140,22 @@ def test_ship_writes_the_claims_the_app_quotes(tmp_path):
     src = tmp_path / "faceswap_v2.joblib"
     joblib.dump(bundle, src)
     sha = hashlib.sha256(src.read_bytes()).hexdigest()
+    frozen = t.REPO / "data" / "manifests" / "faceswap_gate4a.csv"
+    g4_result = {"bundle_sha256": sha, "frozen_manifest": "faceswap_gate4a.csv",
+                 "frozen_manifest_sha256": hashlib.sha256(frozen.read_bytes()).hexdigest(),
+                 "k": 4, "n": 250, "rate": 0.016, "ci": [0.006, 0.04], "passed": True}
     g4 = tmp_path / "g4.json"
-    g4.write_text(json.dumps({"bundle_sha256": sha, "frozen_manifest": "faceswap_gate4a.csv", "k": 4, "n": 250,
-                              "rate": 0.016, "ci": [0.006, 0.04], "passed": True}))
     r3 = tmp_path / "r3.json"
     r3.write_text(json.dumps({"rate": 0.383, "ci": [0.33, 0.439]}))
     out = tmp_path / "shipped.joblib"
-    t.cmd_ship(argparse.Namespace(bundle=str(src), gate4a=str(g4), round3_gate4=str(r3), out=str(out),
-                                  decision=str(tmp_path / "decision.json")))
+    args = argparse.Namespace(bundle=str(src), gate4a=str(g4), round3_gate4=str(r3), out=str(out),
+                              decision=str(tmp_path / "decision.json"))
+    for wrong in ({"frozen_manifest": "some_subset.csv"}, {"frozen_manifest_sha256": "0" * 64}):
+        g4.write_text(json.dumps({**g4_result, **wrong}))
+        with pytest.raises(SystemExit):                               # only the frozen list itself counts
+            t.cmd_ship(args)
+    g4.write_text(json.dumps(g4_result))
+    t.cmd_ship(args)
     b = joblib.load(out)
     assert b["mode"] == "evidence"                                    # gate 3 failed, 4a far below round 3
     c = claims.claims_for(b)

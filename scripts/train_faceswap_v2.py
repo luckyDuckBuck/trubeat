@@ -156,21 +156,30 @@ def drive_url(file_id: str) -> str:
     return f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm=t"
 
 
-def fetch_zip_members(url: str, members: list[str], dest: Path, threads: int = 6) -> tuple[int, list[str]]:
+def fetch_zip_members(url: str, members: list[str], dest: Path, threads: int = 6,
+                      attempts: int = 6) -> tuple[int, list[str]]:
     """Copy the named members of a remote stored zip into ``dest`` (same
-    relative paths) by HTTP range requests; existing files are kept."""
+    relative paths) by HTTP range requests; existing files are kept.
+
+    Each thread opens the zip once (reading its central directory) and reuses
+    it: Google Drive answers 503 when the directory is re-read quickly, so a
+    failed read reopens only that thread's handle, after a growing pause."""
+    import threading
+
     from remotezip import RemoteZip
 
     todo = [m for m in members if not (dest / m).is_file()]
     if not todo:
         return 0, []
     failed: list[str] = []
+    local = threading.local()
 
     def one(m: str) -> bool:
-        for attempt in range(4):
+        for attempt in range(attempts):
             try:
-                with RemoteZip(url) as z:
-                    data = z.read(m)
+                if getattr(local, "z", None) is None:
+                    local.z = RemoteZip(url)
+                data = local.z.read(m)
                 out = dest / m
                 out.parent.mkdir(parents=True, exist_ok=True)
                 tmp = out.with_name(out.name + ".part")
@@ -178,9 +187,16 @@ def fetch_zip_members(url: str, members: list[str], dest: Path, threads: int = 6
                 os.replace(tmp, out)
                 return True
             except Exception as exc:  # noqa: BLE001 - retried, then reported
-                if attempt == 3:
+                z, local.z = getattr(local, "z", None), None
+                if z is not None:
+                    try:
+                        z.close()
+                    except Exception:  # noqa: BLE001, S110 - a broken handle is dropped either way
+                        pass
+                if attempt == attempts - 1:
                     log(f"  failed {m}: {type(exc).__name__}: {str(exc)[:200]}")
-                time.sleep(2 + 3 * attempt)
+                    break
+                time.sleep(min(300.0, 5.0 * 3 ** attempt))
         return False
 
     with ThreadPoolExecutor(threads) as ex:
@@ -564,6 +580,19 @@ def variant_cmd(src: str, dst: str, v: str, spec: dict, window: float, w: int, h
 _W: dict = {}
 
 
+class _SeenCounter:
+    """Wraps a FaceFinder for faceswap.face_crops (which calls only
+    largest_face) and records how many faces the finder saw in each frame."""
+
+    def __init__(self, finder) -> None:
+        self.finder, self.seen = finder, []
+
+    def largest_face(self, rgb):
+        box = self.finder.largest_face(rgb)
+        self.seen.append(int(getattr(self.finder, "last_seen", box is not None)))
+        return box
+
+
 def _init_worker(cfg: dict, stage2: bool) -> None:
     warnings.filterwarnings("ignore")
     _W["cfg"], _W["stage2"] = cfg, stage2
@@ -626,18 +655,9 @@ def process_video(row: dict) -> dict:
                     subprocess.run(cmd, check=True, capture_output=True, timeout=int(cfg["ffmpeg_timeout_s"]))
                     src = dst
                 s = fs.sample_frames(src, int(cfg["n_frames"]), window)
-                seen = []
-                crops = []
-                finder = _W["finder"]
-                for rgb, idx, t in zip(s.frames, s.index, s.time_s):
-                    box = finder.largest_face(rgb)
-                    seen.append(finder.last_seen)
-                    if box is None:
-                        continue
-                    cx, cy, side = box
-                    crop = fs.cut_square(rgb, cx, cy, side, int(cfg["crop_size"]))
-                    sz = int(np.rint(side))           # the same integer box as faceswap.face_crops
-                    crops.append(fs.FaceCrop(crop, idx, t, (int(np.rint(cx - sz / 2)), int(np.rint(cy - sz / 2)), sz, sz)))
+                counter = _SeenCounter(_W["finder"])
+                crops = fs.face_crops(s, counter, inference_cfg(cfg))   # the app's crops, exactly
+                seen = counter.seen
                 rec["n_sampled"], rec["n_faces"], rec["n_seen_max"] = len(s.frames), len(crops), max(seen or [0])
                 if crops:
                     rec["crops"] = np.stack([c.crop for c in crops])
@@ -680,9 +700,20 @@ def extracted_v2(fdir: Path, video_id: str, backbones: list[str]) -> bool:
 
 
 def save_npz(path: Path, arrays: dict) -> None:
+    """Write atomically, keeping what an earlier run saved for backbones or
+    variants this run did not produce (this run's keys win)."""
     path.parent.mkdir(parents=True, exist_ok=True)
+    merged = dict(arrays)
+    if path.is_file():
+        try:
+            with np.load(path, allow_pickle=False) as old:
+                kept = {k: old[k] for k in old.files if k not in arrays}
+            variants = [str(v) for v in kept.pop("variants", [])] + [str(v) for v in arrays.get("variants", [])]
+            merged = {**kept, **arrays, "variants": np.array(list(dict.fromkeys(variants)))}
+        except Exception:  # noqa: BLE001 - a truncated file from a killed run is replaced
+            merged = dict(arrays)
     tmp = path.with_name(path.name + ".tmp.npz")
-    np.savez(tmp, **arrays)
+    np.savez(tmp, **merged)
     os.replace(tmp, path)
 
 
@@ -721,67 +752,114 @@ def cmd_extract(a) -> None:
     log(f"{len(df)} videos, {len(rows)} to extract, backbones {a.backbones}, devices {devices}, "
         f"hevc encoder {hevc_encoder()}")
     t0, n_err, n_done = time.time(), 0, 0
-    log_rows = []
+    log_rows: list[dict] = []
     stopped_early = False
-    with mp.get_context("spawn").Pool(a.workers, initializer=_init_worker,
-                                      initargs=(cfg, stage2_dir is not None)) as pool:
-        for k, res in enumerate(pool.imap_unordered(process_video, rows, chunksize=1), 1):
-            vid = res["video_id"]
-            arrays: dict = {"variants": np.array(list(res["variants"]))}
-            errs = {v: r["error"] for v, r in res["variants"].items() if r["error"]}
+    broken: list[str] = []
+
+    def handle(k: int, res: dict) -> None:
+        nonlocal n_err, n_done
+        vid = res["video_id"]
+        arrays: dict = {"variants": np.array(list(res["variants"]))}
+        errs = {v: r["error"] for v, r in res["variants"].items() if r["error"]}
+        for v, r in res["variants"].items():
+            arrays[f"{v}|error"] = np.array(r["error"])
+            arrays[f"{v}|n_sampled"] = np.array(r["n_sampled"])
+            arrays[f"{v}|n_faces"] = np.array(r["n_faces"])
+            arrays[f"{v}|n_seen_max"] = np.array(r["n_seen_max"])
+            arrays[f"{v}|encoder"] = np.array(r["encoder"])
+        for b, e in embedders.items():
             for v, r in res["variants"].items():
-                arrays[f"{v}|error"] = np.array(r["error"])
-                arrays[f"{v}|n_sampled"] = np.array(r["n_sampled"])
-                arrays[f"{v}|n_faces"] = np.array(r["n_faces"])
-                arrays[f"{v}|n_seen_max"] = np.array(r["n_seen_max"])
-                arrays[f"{v}|encoder"] = np.array(r["encoder"])
-            for b, e in embedders.items():
-                for v, r in res["variants"].items():
-                    if r["crops"] is None:
-                        continue
-                    emb = e.embed(r["crops"])
-                    d = emb.shape[1] // 2
-                    arrays[f"{b}|{v}|cls_mean"] = emb[:, :d].mean(axis=0).astype(np.float32)
-                    arrays[f"{b}|{v}|patch_mean"] = emb[:, d:].mean(axis=0).astype(np.float32)
-                    if v == "v0":
-                        arrays[f"{b}|v0|cls"] = emb[:, :d].astype(np.float16)
-                        arrays[f"{b}|v0|patch"] = emb[:, d:].astype(np.float16)
-                for j, aug in enumerate(res["aug"]):
-                    emb = e.embed(aug)
-                    d = emb.shape[1] // 2
-                    arrays[f"{b}|aug{j}|cls_mean"] = emb[:, :d].mean(axis=0).astype(np.float32)
-                    arrays[f"{b}|aug{j}|patch_mean"] = emb[:, d:].mean(axis=0).astype(np.float32)
-            if stage2_dir is not None and res["jpgs"]:
-                dd = stage2_dir / vid
-                dd.mkdir(parents=True, exist_ok=True)
-                for j, data in enumerate(res["jpgs"]):
-                    (dd / f"{j:02d}.jpg").write_bytes(data)
-                (dd / "done").write_text(str(len(res["jpgs"])))
-            save_npz(feature_path(fdir, vid), arrays)
-            n_done += 1
-            if errs:
-                n_err += 1
-                if n_err <= 10:
-                    log(f"  error on {vid}: {json.dumps(errs)[:400]}")
-                log_rows.append({"video_id": vid, "errors": errs})
-                if n_err == k and k >= 30:
-                    raise SystemExit(f"the first {k} videos all failed: the setup is broken; last: {json.dumps(errs)[:400]}")
-            if k % 100 == 0 or k == len(rows):
-                rate = k / max(time.time() - t0, 1e-9)
-                log(f"  {k}/{len(rows)} ({rate:.2f} videos/s, {n_err} with errors, ~{(len(rows) - k) / max(rate, 1e-9) / 60:.0f} min left)")
-            if a.time_budget_s and time.time() - t0 > a.time_budget_s:
-                stopped_early = True   # a cloud session must end cleanly, with its outputs saved; a rerun resumes
-                log(f"  time budget ({a.time_budget_s:.0f} s) reached after {k}/{len(rows)} videos: stopping cleanly")
+                if r["crops"] is None:
+                    continue
+                emb = e.embed(r["crops"])
+                d = emb.shape[1] // 2
+                arrays[f"{b}|{v}|cls_mean"] = emb[:, :d].mean(axis=0).astype(np.float32)
+                arrays[f"{b}|{v}|patch_mean"] = emb[:, d:].mean(axis=0).astype(np.float32)
+                if v == "v0":
+                    arrays[f"{b}|v0|cls"] = emb[:, :d].astype(np.float16)
+                    arrays[f"{b}|v0|patch"] = emb[:, d:].astype(np.float16)
+            for j, aug in enumerate(res["aug"]):
+                emb = e.embed(aug)
+                d = emb.shape[1] // 2
+                arrays[f"{b}|aug{j}|cls_mean"] = emb[:, :d].mean(axis=0).astype(np.float32)
+                arrays[f"{b}|aug{j}|patch_mean"] = emb[:, d:].mean(axis=0).astype(np.float32)
+        if stage2_dir is not None and res["jpgs"]:
+            dd = stage2_dir / vid
+            dd.mkdir(parents=True, exist_ok=True)
+            for j, data in enumerate(res["jpgs"]):
+                (dd / f"{j:02d}.jpg").write_bytes(data)
+            (dd / "done").write_text(str(len(res["jpgs"])))
+        save_npz(feature_path(fdir, vid), arrays)
+        n_done += 1
+        if errs:
+            n_err += 1
+            if n_err <= 10:
+                log(f"  error on {vid}: {json.dumps(errs)[:400]}")
+            log_rows.append({"video_id": vid, "errors": errs})
+            if n_err == k and k >= 30:
+                raise SystemExit(f"the first {k} videos all failed: the setup is broken; last: {json.dumps(errs)[:400]}")
+        if k % 100 == 0 or k == len(rows):
+            rate = k / max(time.time() - t0, 1e-9)
+            log(f"  {k}/{len(rows)} ({rate:.2f} videos/s, {n_err} with errors, "
+                f"~{(len(rows) - k) / max(rate, 1e-9) / 60:.0f} min left)")
+
+    from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+    from concurrent.futures.process import BrokenProcessPool
+
+    # A worker killed mid-task (out of memory, a native crash) breaks the pool:
+    # the run stops with an error and a rerun resumes, instead of hanging on a
+    # result that never comes. At most `window` results wait in memory.
+    window = max(2, 2 * int(a.workers))
+    todo = iter(rows)
+    k = 0
+    with ProcessPoolExecutor(a.workers, mp_context=mp.get_context("spawn"), initializer=_init_worker,
+                             initargs=(cfg, stage2_dir is not None)) as ex:
+        inflight: dict = {}
+
+        def fill() -> None:
+            while len(inflight) < window and not broken and not stopped_early:
+                r = next(todo, None)
+                if r is None:
+                    return
+                try:
+                    inflight[ex.submit(process_video, r)] = r["video_id"]
+                except BrokenProcessPool:   # the pool broke between two results
+                    broken.append(r["video_id"])
+                    return
+
+        fill()
+        while inflight:
+            done, _ = wait(inflight, return_when=FIRST_COMPLETED)
+            for fut in done:
+                vid = inflight.pop(fut)
+                try:
+                    res = fut.result()
+                except BrokenProcessPool:
+                    broken.append(vid)
+                    continue
+                k += 1
+                handle(k, res)
+            if broken:
+                broken += list(inflight.values())
+                log(f"  a worker process died (out of memory?); in flight: {broken[:8]}; stopping, rerun to resume")
                 break
+            if a.time_budget_s and time.time() - t0 > a.time_budget_s and not stopped_early:
+                stopped_early = True   # a session must end cleanly, with its outputs saved; a rerun resumes
+                log(f"  time budget ({a.time_budget_s:.0f} s) reached after {k}/{len(rows)} videos: stopping cleanly")
+            fill()
+            if broken and not inflight:
+                log(f"  a worker process died (out of memory?); in flight: {broken[:8]}; stopping, rerun to resume")
     lp = fdir / "extract_log.json"
     old = json.loads(lp.read_text()) if lp.is_file() else {"runs": []}
     old["runs"].append({"finished": time.strftime("%Y-%m-%d %H:%M"), "videos": len(rows), "written": n_done,
-                        "stopped_early": stopped_early, "with_errors": n_err,
+                        "stopped_early": stopped_early, "with_errors": n_err, "worker_died_in_flight": broken,
                         "errors": log_rows[:500], "hevc_encoder": hevc_encoder(), "window_s": cfg["window_s"],
                         "devices": devices, "versions": versions()})
     lp.parent.mkdir(parents=True, exist_ok=True)
     lp.write_text(json.dumps(old, indent=1))
     log(f"done: {n_done} videos written, {n_err} with an error in at least one variant (see {lp})")
+    if broken:
+        raise SystemExit(3)
     if n_err and a.strict:
         raise SystemExit(f"{n_err} videos had errors (strict mode)")
 
@@ -928,7 +1006,7 @@ def lomo(st_t: pd.DataFrame, X: np.ndarray, C: float, folds: np.ndarray, n_folds
         for f in range(n_folds):
             trm = (folds != f) & (st_t.family != fam).to_numpy()
             tem = (folds == f) & ((st_t.label == "real") | (st_t.family == fam)).to_numpy() & (st_t.source == "v0").to_numpy()
-            if trm.sum() == 0 or y[tem].min() == y[tem].max():
+            if trm.sum() == 0 or tem.sum() == 0 or y[tem].min() == y[tem].max():
                 continue
             m = fit(X[trm], st_t[trm], C)
             vals.append(auc(y[tem], swap_score(m, X[tem])))
@@ -1095,7 +1173,8 @@ def gates_v2(M: dict, cfg: dict) -> list[tuple[str, bool | None, str]]:
         vals = [v for v in df40.values() if not np.isnan(v)]
         ok = bool(vals) and float(np.mean(vals)) >= 0.80 and min(vals) >= 0.70
         out.append(("1b. DF40 face-swap methods on FF++ test identities: mean AUC >= 0.80, none < 0.70", ok,
-                    f"mean {np.mean(vals):.3f}, min {min(vals):.3f} over {len(vals)} methods"))
+                    f"mean {np.mean(vals):.3f}, min {min(vals):.3f} over {len(vals)} methods" if vals
+                    else "no DF40 method had judged fakes and reals to score"))
     else:
         out.append(("1b. DF40 face-swap methods on FF++ test identities", None, "not applicable: DF40 not available"))
     k, n, t = M.get("ffpp|v0|reals|all", (None, None, None))
@@ -1270,6 +1349,8 @@ def cmd_select(a) -> None:
     folds = group_folds(tr.group, int(sel["folds"]), int(sel["seeds"][0]))
     oof = np.full(len(tr), np.nan)
     for f in range(int(sel["folds"])):
+        if not (folds == f).any() or not (folds != f).any():
+            continue                               # fewer groups than folds (small runs only)
         m = fit(Xt[folds != f], tr[folds != f], C)
         oof[folds == f] = swap_score(m, Xt[folds == f])
     real = threshold_reals(tr)
@@ -1295,6 +1376,9 @@ def cmd_select(a) -> None:
         "trained_on": tr.groupby(["dataset", "family"]).size().to_dict(),
         "stage_a": sa.to_dict("records"), "stage_b": sb.drop(columns=["cost"]).to_dict("records"),
         "lopso_constraint_met": constraint_met, "dedupe": {**dd_summary, "removed_list": removed[:200]},
+        # every number above was measured on frames sampled within the first window_s of each clip; the app
+        # samples within the first max_seconds (config) and gate 4a is measured the app's way (docs/13 §6.6)
+        "measured_window_s": float(cfg["window_s"]),
         "metrics": {k: (list(v) if isinstance(v, tuple) else v) for k, v in M.items()},
         "gates": g, "in_domain_oof_auc": in_domain, "created": time.strftime("%Y-%m-%d %H:%M"),
         "versions": versions(), "backbone_sha256": weights_sha(b), "round": 4,
@@ -1311,6 +1395,11 @@ def cmd_select(a) -> None:
           f"every held-out rate is over judged clips (a face in >= {min_faces} of {cfg['n_frames']} frames) and "
           "printed with the total; AUC intervals resample identity groups; rate intervals are Wilson. "
           f"Config hash `{fs.config_hash(icfg)}`; versions {json.dumps(bundle['versions'])}."), "",
+         (f"Sampling: every number in this report was measured on {cfg['n_frames']} frames sampled within the first "
+          f"{float(cfg['window_s']):g} s of each clip and processing variant (`window_s`). The app samples within the "
+          f"first {float(cfg['max_seconds']):g} s (`max_seconds`, the config hash above); most training and test "
+          "clips are shorter than 20 s, and gate 4a is measured on the laptop the app's way (docs/13 §6.6 item 7)."),
+         "",
          (f"Dedupe (docs/13 §3.2): {dd_summary['removed']} of {dd_summary['candidates']} DF40 training clips "
           f"removed (mean v0 face embedding, {db}, cosine >= {dd_summary['threshold']} with one of "
           f"{dd_summary['references']} held-out clips); {len(excluded)} more excluded after the laptop's "
@@ -1435,8 +1524,12 @@ def cmd_ship(a) -> None:
     if g4.get("bundle_sha256") != hashlib.sha256(src.read_bytes()).hexdigest():
         raise SystemExit("the gate-4a result was measured on a different bundle file; rerun "
                          "scripts/check_faceswap_reals.py --manifest data/manifests/faceswap_gate4a.csv on this one")
-    if not g4.get("frozen_manifest"):
-        raise SystemExit("gate 4a must be measured on the frozen list (--manifest data/manifests/faceswap_gate4a.csv)")
+    frozen = REPO / "data" / "manifests" / "faceswap_gate4a.csv"
+    if (g4.get("frozen_manifest") != frozen.name
+            or g4.get("frozen_manifest_sha256") != hashlib.sha256(frozen.read_bytes()).hexdigest()):
+        raise SystemExit("gate 4a must be measured on the frozen list itself (scripts/check_faceswap_reals.py "
+                         "--manifest data/manifests/faceswap_gate4a.csv); this result names another list or an "
+                         "edited one")
     r3 = json.loads(Path(a.round3_gate4).read_text()) if a.round3_gate4 else None
     b = joblib.load(src)
     b.pop("_path", None)
