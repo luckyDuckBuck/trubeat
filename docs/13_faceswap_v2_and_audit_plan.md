@@ -729,11 +729,143 @@ method and deleted. GPU quota used: 3–8 of 30 h.
 
 ---
 
-## 10. Result
+## 10. Result (2026-11-08)
 
-(Written in phase 3: the §6.3 table with measured values and intervals,
-the §6.2 selection table, the finder report, the outcome, what was not
-measured, and the laptop numbers.)
+Everything ran on the laptop (§6.6 item 10), from 2026-11-07 13:05 to
+2026-11-08 23:14, including a 14.5 h wait while Google Drive refused the
+DF40 downloads ("Quota exceeded", 06:12 to 20:36). Selection at commit
+`676d4c3`, config hash `aaaae705`. Reports: `reports/faceswap_v2_report.md`
+(selection and every held-out table), `reports/faceswap_gate4a.md` (gate 4a),
+`reports/faceswap_v2_overlap.json`, `reports/faceswap_v2_decision.json`.
+
+**Data.** 12,947 videos in 23 manifest parts:
+
+- FaceForensics++ c23 and c40: 1,000 originals and 5,000 fakes over
+  Deepfakes, Face2Face, FaceShifter, FaceSwap and NeuralTextures, on the
+  official identity splits.
+- DFD: 150 real, 300 fake (external).
+- DF40: 2,400 training fakes (300 per method from 8 face-swap methods, on
+  FF++ train/val identities). Its test zips hold 11 methods on FF++ test
+  identities and 8 on Celeb-DF identities; they are report-only, except
+  gate 1b.
+- Celeb-DF v2: the 518-clip test list (178 real, 340 fake) and the 712
+  reals outside it.
+- UADFV: 49 real, 100 fake (report only).
+
+Two FF++ videos lost one variant each (an ffmpeg timeout during a pause of
+the run). Selection leaves those two variants out.
+
+**Dedupe and overlap.** No near-copies on either side:
+
+- vs the 5,383 held-out clips: 0 of the 2,400 DF40 training clips at cosine
+  ≥ 0.97 (nearest: median 0.842, max 0.961).
+- vs the gate-4a clips (440 with a face): 0 of 2,400 (nearest: median
+  0.738, max 0.878).
+
+**Selection (§6.2).**
+
+- **Stage A** (LOMO macro AUC on the base set, 3 × 5 group folds): cls
+  C=0.01 scored 0.890 (sd 0.003), cls+patch C=0.01 scored 0.887 (sd 0.003).
+  Larger C scored lower.
+- **Stage B:** no candidate met LOPSO ≤ 6%. The c40 source dominates
+  (14.3% to 47.4% of its reals cross the threshold when it is left out).
+  The rule therefore chose the lowest LOPSO: **cls+patch, C=0.01, training
+  set `video`** (all six variants), LOPSO max 14.3%, LOMO 0.861.
+- **Threshold:** +3.1987, set at 3% on out-of-fold reals of the training
+  set, sources weighted equally. In-domain out-of-fold AUC on v0: 0.898.
+
+**Gates (§6.3).** Rates are over judged clips, with Wilson 95% intervals.
+AUC intervals resample identity groups.
+
+| # | gate | measured | pass |
+|---|---|---|---|
+| 1 | FF++ c23 test AUC ≥ 0.85 (Deepfakes, FaceSwap, FaceShifter) | 0.973 [0.958, 0.986], 0.938 [0.916, 0.960], 0.915 [0.890, 0.938] | yes |
+| 1b | DF40 face-swap methods on FF++ test identities: mean ≥ 0.80, none < 0.70 | mean 0.926, min 0.873 (facedancer), 7 methods | yes |
+| 2 | FF++ c23 test reals flagged ≤ 5/134 | 1/140 = 0.7% [0.1, 3.9] | yes |
+| 2b | the same reals after v1, c40 and v3, each ≤ 5% | 3/140 = 2.1% [0.7, 6.1]; 3/140 = 2.1%; 1/140 = 0.7% | yes |
+| 3 | DFD: AUC ≥ 0.70, reals ≤ 8% | AUC 0.819 [0.785, 0.865]; 7/150 = 4.7% [2.3, 9.3] | yes |
+| 3b | Celeb-DF v2 test list: AUC ≥ 0.75, reals ≤ 8% | AUC 0.778 [0.735, 0.818]; 20/178 = 11.2% [7.4, 16.7] | **no** |
+| 4a | frozen 706-clip list: ≤ 3% of judged, n ≥ 200, no source > 6% | 61/383 = 15.9% [12.6, 19.9]; AIGVDBench 18/197 = 9.1%, GenBuster-Bench 43/186 = 23.1% | **no** |
+| 4b | Celeb-DF v2 reals outside the test list ≤ 5% | 63/711 = 8.9% [7.0, 11.2] | **no** |
+
+**Outcome: evidence only; v2 replaces the round-3 bundle.** Gates 1, 2
+and 2b pass; 3b, 4a and 4b fail. On the same frozen list, v2 flags 15.9%
+[12.6, 19.9] where round 3 flagged 115/300 = 38.3% [33.0, 43.9]. The
+intervals do not overlap, so `ship` wrote v2 as
+`src/trubeat/models/faceswap.joblib` (`mode: evidence`, SHA-256
+`3c125d70…`).
+
+The face-swap layer still never decides the verdict; the pulse check
+decides as before (docs/12 §5 B). The caveat, and the extension's fallback
+caveat, quote 16% from the bundle's claims. Stage 2 was not tried: it runs
+only when gate 1, 2 or 2b fails.
+
+**Reported in every case, never gated:**
+
+- **Reenactment fakes, FF++ test (v0):**
+  - AUC: Face2Face 0.911 [0.885, 0.937], NeuralTextures 0.833
+    [0.806, 0.862].
+  - Caught at the threshold, of 140 each: Deepfakes 73.6%, FaceSwap 56.4%,
+    Face2Face 47.9%, FaceShifter 37.1%, NeuralTextures 16.4%.
+- **Processing, FF++ test** (reals flagged, then Deepfakes AUC):
+
+  | variant | reals flagged | Deepfakes AUC |
+  |---|---|---|
+  | c40 | 2.1% | 0.937 |
+  | v1 (WhatsApp-like) | 2.1% | 0.933 |
+  | v2 (stock-clip HEVC) | 1.4% | 0.968 |
+  | v3 (the extension's VP9 capture) | 0.7% | 0.975 |
+  | v4 (upscaled re-upload) | 0.0% | 0.965 |
+
+  Round 3's WhatsApp-like false alarms were 45/140 = 32.1% (docs/12 §9);
+  v2's are 3/140 = 2.1%.
+- **DFD under processing:** reals flagged 4.7% (v0) to 9.3% (c40); AUC
+  0.58 (v1) to 0.82 (v0).
+- **DF40, FF++ test identities:**
+  - reenactment and lip-sync methods: AUC facevid2vid 0.895, fomm 0.955,
+    pirender 0.903, wav2lip 0.681 (caught 2/140);
+  - the 7 face-swap methods: AUC 0.873 to 0.972.
+- **DF40 face-swap methods on Celeb-DF identities**, against Celeb-DF
+  reals (cross-dataset): AUC 0.693 (simswap) to 0.983 (faceswap).
+- **Celeb-DF v2 test fakes:** caught 131/340 = 38.5%.
+- **UADFV:** AUC 0.870 [0.827, 0.917]; reals flagged 3/49.
+- **Clips with a face** (judged, of N):
+  - every FF++ test clip in every variant;
+  - all but 1 of 712 Celeb-DF reals outside the test list;
+  - all but 1 of the 1,200 DF40 fakes on Celeb-DF identities;
+  - all but 1 of 100 UADFV fakes;
+  - DFD: 297 to 300 of the 300 fakes per variant, and 149 of the 150
+    reals in v1 and v2.
+
+  On the frozen gate-4a list, the two-pass finder judges 383 of 706 clips;
+  round 3's Landmarker judged 300 (`reports/facefind.md`).
+- **The RepresentUs clip** (report only, never tuned on): v2 scores +2.71
+  against threshold +3.20, face in 13 of 16 sampled frames. It is **not
+  flagged**, but it scores above 96.5% of the model's real training faces.
+  Round 3: −0.55 against +1.58 (13 of 16), not flagged.
+- **`user_eval`:** not measured; no labelled clips on disk
+  (`data/raw/user_eval` is absent).
+- **Latency on this laptop** (Ryzen 5 4600H, 7 GB, CPU, all four layers): a
+  15 s 1080p clip with a face takes 23.8 s cold (models load) and 20.4 s
+  warm.
+- **LOMO sd:** 0.003 for the chosen representation.
+
+**What was not measured.**
+
+- Gate 4a through the extension's capture path on live pages (§6.4 checked
+  the crop on one capture).
+- OpenVid reals (not used, §6.6 item 9).
+- L/14 (dropped, §6.6 item 12).
+- `user_eval`.
+
+**Laptop numbers.**
+
+- FF++ extraction: 6,450 videos × 6 variants in 14.1 h wall
+  (0.13–0.15 videos/s, 3 workers, GTX 1650).
+- DF40 test zips: ~2.2 videos/s (v0 only).
+- Selection: 50 min at 2 parallel fits. Four fits ran the 7 GB laptop out
+  of memory in a rehearsal.
+- Gate 4a: 29 min at 2 workers.
 
 ---
 
