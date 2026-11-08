@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from functools import lru_cache
 from pathlib import Path
 
@@ -53,19 +54,53 @@ def file_sha256(path: str | Path) -> str:
     return _sha256(str(Path(path).resolve()), st.st_mtime_ns, st.st_size)
 
 
+def _num(x) -> bool:
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(float(x))
+
+
+def _rate(d) -> bool:
+    return isinstance(d, dict) and _num(d.get("rate"))
+
+
+def well_formed(c) -> bool:
+    """Every key a text reads is there, with a usable type. Claims that fail
+    count as no claims (docs/13 A-14: a malformed bundle must not break the
+    app, and must not quote half its numbers)."""
+    if not isinstance(c, dict):
+        return False
+    layer = c.get("layer")
+    if layer == "ai_video":
+        rec = c.get("recall")
+        return (_num(c.get("families")) and _num(c.get("min_seconds")) and isinstance(c.get("source"), str)
+                and _rate(c.get("real_fpr")) and isinstance(rec, list) and len(rec) > 0
+                and all(isinstance(r, dict) and isinstance(r.get("what"), str) and _num(r.get("rate")) for r in rec)
+                and (c.get("target_fpr") is None or _num(c.get("target_fpr"))))
+    if layer == "pulse":
+        rec = c.get("recall")
+        return (isinstance(rec, dict) and _num(rec.get("Deepfakes")) and all(_num(v) for v in rec.values())
+                and _rate(c.get("real_fpr"))
+                and (c.get("strict_threshold") is None or _num(c.get("strict_threshold"))))
+    if layer == "face_swap":
+        out = c.get("outside_fpr")
+        return (isinstance(c.get("source"), str) and (out is None or _rate(out))
+                and (c.get("target_fpr") is None or _num(c.get("target_fpr"))))
+    return False
+
+
 def claims_for(bundle: dict | None) -> dict | None:
     """The claims of a loaded bundle: its own ``claims``, else the entry for
-    its file in ``models/claims.json``, else None."""
+    its file in ``models/claims.json``, else None. Claims that are not
+    :func:`well_formed` are skipped."""
     if not isinstance(bundle, dict):
         return None
     own = bundle.get("claims")
-    if isinstance(own, dict):
+    if well_formed(own):
         return own
     path = bundle.get("_path")
     if not path or not Path(path).is_file():
         return None
     entry = _table().get(file_sha256(path))
-    return entry if isinstance(entry, dict) else None
+    return entry if well_formed(entry) else None
 
 
 def about(rate: float) -> str:

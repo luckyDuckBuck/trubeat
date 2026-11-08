@@ -262,6 +262,7 @@ def _pick_bundle(explicit, candidates, load, what: str):
     model (docs/13 A-07). ``load(path)`` returns the bundle or raises."""
     cands = [Path(explicit)] if explicit else list(candidates)
     packaged = Path(__file__).parent / "models"
+    refused: list[str] = []
     for path in cands:
         if not path.is_file():
             continue
@@ -275,9 +276,15 @@ def _pick_bundle(explicit, candidates, load, what: str):
         bundle.setdefault("_path", str(path))
         overriding = explicit is None and path.resolve().parent != packaged.resolve()
         if overriding and claims.claims_for(bundle) is None:
-            print(f"warning: {what} {path} records no measured numbers (claims); using the packaged "
-                  "model instead (docs/13 A-07)")
+            note = (f"W_OVERRIDE_REFUSED: {what} {path} records no measured numbers (claims), so the "
+                    "packaged model was used (docs/13 A-07)")
+            print(f"warning: {note}")
+            refused.append(note)
             continue
+        if refused:   # shown with the result, not only on the server's console
+            from .bundles import WARNINGS_KEY
+
+            bundle[WARNINGS_KEY] = list(bundle.get(WARNINGS_KEY) or []) + refused
         return bundle
     return None
 
@@ -387,52 +394,76 @@ def analyze_video(
     config = dict(config or {})
     path = Path(video_path)
     a = PulseAnalysis(verdict="inconclusive", headline="", detail="")
-    a.claims = model_claims(model_path, aigen_path, faceswap_path, layers)
-    a.caveat = claims.caveat(a.claims.get("ai_video"), a.claims.get("pulse"), a.claims.get("face_swap"),
-                             fsd_mode=a.claims.get("fsd_mode", "evidence"))
-    strict = (a.claims.get("pulse") or {}).get("strict_threshold")
-    thr = thresholds or (replace(DEFAULT_THRESHOLDS, faceswap_threshold=float(strict)) if strict is not None
-                         else DEFAULT_THRESHOLDS)
     if not path.is_file():
+        _quote(a, model_claims(model_path, aigen_path, faceswap_path, layers))   # bundle files only
         a.warnings.append("E_UNREADABLE")
         a.layers["file"] = f"not a readable file: {path.name}"
-        return verdict_for(a, thr)
+        return verdict_for(a, thresholds or DEFAULT_THRESHOLDS)
     bar = _ProgressPlan(progress, path, layers, max_seconds)
+    # Each layer returns the bundle it scored with; the texts quote the claims
+    # of exactly those objects (docs/13 A-07), loaded once per analysis.
+    used: dict = {}
     if "provenance" in layers:
         bar("provenance", 0.0, "Reading Content Credentials")
         _provenance_layer(a, path)
     if "ai_video" in layers:
         bar("ai_video", 0.0, "AI-video detector: loading the model")
-        _ai_video_layer(a, path, aigen_path, bar, region)
+        used["ai_video"] = _ai_video_layer(a, path, aigen_path, bar, region)
     if "face_swap" in layers:
         bar("face_swap", 0.0, "Face-swap detector: loading the model")
-        _face_swap_layer(a, path, faceswap_path, bar, region)
+        used["face_swap"] = _face_swap_layer(a, path, faceswap_path, bar, region)
+    thr = thresholds or DEFAULT_THRESHOLDS
     if "pulse" in layers:
+        det = load_detector(model_path)          # its claims set the strict threshold, its model scores
+        used["pulse"] = det
+        strict = (claims.claims_for(det) or {}).get("strict_threshold")
+        if thresholds is None and strict is not None:
+            thr = replace(DEFAULT_THRESHOLDS, faceswap_threshold=float(strict))
         bar("decode", 0.0, "Pulse: decoding the video")
-        _pulse_layer(a, path, config, model_path, thr, max_seconds, bar, region)
+        _pulse_layer(a, path, config, model_path, thr, max_seconds, bar, region, detector=det)
+    _quote(a, claims_of(used))
     return verdict_for(a, thr)
+
+
+def claims_of(bundles: dict) -> dict:
+    """Claims per layer of the given bundles ({layer: bundle or None}), plus
+    the face-swap bundle's mode under ``fsd_mode`` (docs/13 A-07)."""
+    out: dict = {"fsd_mode": "evidence"}
+    for layer, b in bundles.items():
+        out[layer] = claims.claims_for(b)
+    if bundles.get("face_swap") is not None:
+        out["fsd_mode"] = str(bundles["face_swap"].get("mode", "evidence"))
+    return out
+
+
+def _quote(a: PulseAnalysis, cl: dict) -> None:
+    """Attach the claims and the caveat rendered from them; a text never
+    breaks an analysis (docs/13 A-14): on any error the caveat quotes no numbers."""
+    a.claims = cl
+    try:
+        a.caveat = claims.caveat(cl.get("ai_video"), cl.get("pulse"), cl.get("face_swap"),
+                                 fsd_mode=cl.get("fsd_mode", "evidence"))
+    except Exception:  # noqa: BLE001
+        a.caveat = claims.caveat(None, None, None, fsd_mode=cl.get("fsd_mode", "evidence"))
 
 
 def model_claims(model_path=DEFAULT_MODEL_PATH, aigen_path=None, faceswap_path=None,
                  layers: tuple[str, ...] = ("ai_video", "face_swap", "pulse")) -> dict:
-    """The claims of the models analyze_video will use, per layer, plus the
-    face-swap bundle's mode under ``fsd_mode`` (docs/13 A-07); reading them
-    loads only the small bundle files, not the backbones."""
+    """The claims of the models an analysis would use, per layer, plus the
+    face-swap bundle's mode under ``fsd_mode`` (docs/13 A-07), from the small
+    bundle files alone (no backbone): the UI's caveat before any analysis.
+    An analysis quotes the bundles it actually scored with (``claims_of``)."""
     from . import aigen, faceswap
 
-    out: dict = {"fsd_mode": "evidence"}
+    b: dict = {}
     if "ai_video" in layers:
-        out["ai_video"] = claims.claims_for(_pick_bundle(aigen_path, aigen.BUNDLE_SEARCH_PATHS, aigen.load_bundle,
-                                                         "AI-video bundle"))
+        b["ai_video"] = _pick_bundle(aigen_path, aigen.BUNDLE_SEARCH_PATHS, aigen.load_bundle, "AI-video bundle")
     if "face_swap" in layers:
-        fs_bundle = _pick_bundle(faceswap_path, faceswap.BUNDLE_SEARCH_PATHS, faceswap.load_bundle,
-                                 "face-swap bundle")
-        out["face_swap"] = claims.claims_for(fs_bundle)
-        if fs_bundle is not None:
-            out["fsd_mode"] = str(fs_bundle.get("mode", "evidence"))
+        b["face_swap"] = _pick_bundle(faceswap_path, faceswap.BUNDLE_SEARCH_PATHS, faceswap.load_bundle,
+                                      "face-swap bundle")
     if "pulse" in layers:
-        out["pulse"] = claims.claims_for(load_detector(model_path))
-    return out
+        b["pulse"] = load_detector(model_path)
+    return claims_of(b)
 
 
 def current_caveat() -> str:
@@ -457,15 +488,18 @@ def _provenance_layer(a: PulseAnalysis, path: Path) -> None:
 
 
 def _ai_video_layer(a: PulseAnalysis, path: Path, aigen_path,
-                    bar: _ProgressPlan | None = None, region=None) -> None:
+                    bar: _ProgressPlan | None = None, region=None) -> dict | None:
+    """The whole-frame AI-video detector; returns the bundle it used (or None)."""
     from . import aigen
+    from .bundles import WARNINGS_KEY
     from .errors import ModelMissing
 
     bundle, embedder = load_aigen(aigen_path)
     if bundle is None:
         a.layers["ai_video"] = "not available: no trained AI-video model installed"
         a.warnings.append("W_NO_AIGEN_MODEL")
-        return
+        return None
+    a.warnings += [w for w in bundle.get(WARNINGS_KEY) or [] if w not in a.warnings]
     try:
         res = aigen.analyze(
             path, bundle, embedder=embedder,
@@ -475,11 +509,11 @@ def _ai_video_layer(a: PulseAnalysis, path: Path, aigen_path,
     except ModelMissing as exc:
         a.layers["ai_video"] = f"not available: {exc}"
         a.warnings.append(exc.code)
-        return
+        return bundle
     except Exception as exc:  # noqa: BLE001 — the app must not crash
         a.layers["ai_video"] = f"failed: {type(exc).__name__}: {exc}"
         a.warnings.append("W_AIGEN_FAILED")
-        return
+        return bundle
     a.ai_available = True
     a.ai_label = res.label
     a.ai_real_percentile = res.real_percentile
@@ -496,18 +530,22 @@ def _ai_video_layer(a: PulseAnalysis, path: Path, aigen_path,
         )
     if not a.duration_s and res.duration_s:
         a.duration_s = float(res.duration_s)
+    return bundle
 
 
 def _face_swap_layer(a: PulseAnalysis, path: Path, faceswap_path,
-                     bar: _ProgressPlan | None = None, region=None) -> None:
-    """The face-swap detector (docs/12): runs on any clip with a visible face."""
+                     bar: _ProgressPlan | None = None, region=None) -> dict | None:
+    """The face-swap detector (docs/12): runs on any clip with a visible face;
+    returns the bundle it used (or None)."""
     from . import faceswap
+    from .bundles import WARNINGS_KEY
     from .errors import ModelMissing
 
     bundle, emb, finder = load_faceswap(faceswap_path)
     if bundle is None:
         a.layers["face_swap"] = "not available: no trained face-swap model installed"
-        return
+        return None
+    a.warnings += [w for w in bundle.get(WARNINGS_KEY) or [] if w not in a.warnings]
     try:
         res = faceswap.analyze(
             path, bundle, embedder=emb, finder=finder,
@@ -521,11 +559,11 @@ def _face_swap_layer(a: PulseAnalysis, path: Path, faceswap_path,
     except ModelMissing as exc:
         a.layers["face_swap"] = f"not available: {exc}"
         a.warnings.append(exc.code)
-        return
+        return bundle
     except Exception as exc:  # noqa: BLE001 — the app must not crash, even on a malformed bundle
         a.layers["face_swap"] = f"failed: {type(exc).__name__}: {exc}"
         a.warnings.append("W_FACESWAP_DETECTOR_FAILED")
-        return
+        return bundle
     a.fsd_mode, a.fsd_target_fpr, a.fsd_outside_fpr = mode, target_fpr, outside
     a.fsd_label, a.fsd_score, a.fsd_threshold = res.label, res.score, res.threshold
     a.fsd_real_percentile, a.fsd_n_faces, a.fsd_n_sampled = res.real_percentile, res.n_faces, res.n_sampled
@@ -543,6 +581,10 @@ def _face_swap_layer(a: PulseAnalysis, path: Path, faceswap_path,
         a.layers["face_swap"] = "could not run: " + (res.warnings[-1] if res.warnings else res.label)
     if not a.duration_s and res.duration_s:
         a.duration_s = float(res.duration_s)
+    return bundle
+
+
+_LOAD = object()   # _pulse_layer's default: load the detector itself
 
 
 def _pulse_layer(
@@ -550,8 +592,10 @@ def _pulse_layer(
     max_seconds: float,
     bar: _ProgressPlan | None = None,
     region=None,
+    detector=_LOAD,
 ) -> None:
-    """Face tracking, per-region pulse, and the G2 face-swap score."""
+    """Face tracking, per-region pulse, and the G2 face-swap score.
+    ``detector`` = the bundle analyze_video already loaded (None: none)."""
     bar = bar or _ProgressPlan(None, path, (), max_seconds)
     try:
         stream = ingest.open_video(
@@ -584,7 +628,7 @@ def _pulse_layer(
 
     # The G2 bundle decides the rPPG method and window (it was trained with
     # them; using the config's would feed the model the wrong features).
-    bundle = load_detector(model_path)
+    bundle = load_detector(model_path) if detector is _LOAD else detector
     if bundle is not None:
         from .bundles import WARNINGS_KEY
 

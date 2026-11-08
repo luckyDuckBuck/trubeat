@@ -560,7 +560,7 @@ def test_region_reaches_every_layer(tmp_path, monkeypatch):
     monkeypatch.setattr(app_mod, "_ai_video_layer", lambda a, p, ap, bar, region: seen.update(ai=region))
     monkeypatch.setattr(app_mod, "_face_swap_layer", lambda a, p, fp, bar, region: seen.update(fs=region))
     monkeypatch.setattr(app_mod, "_pulse_layer",
-                        lambda a, p, c, m, thr, ms, bar, region: seen.update(pulse=region))
+                        lambda a, p, c, m, thr, ms, bar, region, **kw: seen.update(pulse=region))
     p = tmp_path / "clip.mp4"
     p.write_bytes(b"x")
     app_mod.analyze_video(p, region=(0, 0, 320, 240), layers=("ai_video", "face_swap", "pulse"))
