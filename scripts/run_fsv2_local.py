@@ -231,8 +231,13 @@ def step_cdf2_on_disk() -> None:
 
 def step_cdf2() -> None:
     need_gb(4, "Celeb-DF v2 (test list and reals)")
-    fetch([VPY, TF2, "fetch", "--root", DATA, "--datasets", "cdf2", "--links", LINKS],
-          t.drive_url(json.loads(LINKS.read_text())["cdf2_id"]), "Celeb-DF v2")
+    fetched = OUT / "manifests" / "cdf2.fetched"   # every planned video is on disk: no Drive read (or wait) again
+    if not fetched.is_file():
+        fetch([VPY, TF2, "fetch", "--root", DATA, "--datasets", "cdf2", "--links", LINKS],
+              t.drive_url(json.loads(LINKS.read_text())["cdf2_id"]), "Celeb-DF v2")
+        rep = json.loads((DATA / "fetch_report.json").read_text()).get("cdf2", {})
+        if rep.get("planned") and not rep.get("failed"):
+            fetched.write_text(f"{rep['planned']} planned\n")
     man = OUT / "manifests" / "cdf2.csv"
     t.finish_manifest(t.manifest_cdf2(DATA / "cdf2"), man)
     extract(man)
