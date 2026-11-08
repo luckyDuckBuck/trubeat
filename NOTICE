@@ -26,17 +26,22 @@ In short:
 -------------------------------------------------------
 
 faceswap.joblib
-  The round-3 face-swap detector (docs/12 §9), shown as evidence only: a
-  logistic regression over frozen CLIP ViT-B/16 features of face crops,
-  trained on FaceForensics++ c23 train + val (original, Deepfakes,
-  Face2Face, FaceShifter, FaceSwap, NeuralTextures). DeepFakeDetection was
-  a test set only.
+  The face-swap detector v2 (round 4, docs/13 §10), shown as evidence
+  only: a logistic regression over frozen CLIP ViT-B/16 features (CLS
+  token and patch mean) of face crops. It was trained on:
+    - FaceForensics++ c23 and c40 train + val (original, Deepfakes,
+      Face2Face, FaceShifter, FaceSwap, NeuralTextures), each also
+      re-encoded four ways (docs/13 §3.2);
+    - DF40 fakes of eight face-swap methods on FaceForensics++ train/val
+      identities (BlendFace, E4S, FaceDancer, FaceSwap, FSGAN, InSwapper,
+      MobileSwap, SimSwap).
+  DeepFakeDetection, Celeb-DF v2, UADFV and the DF40 test sets were test
+  sets only. It uses no OpenVid-1M clips (docs/13 §6.6 item 9). It
+  replaced the round-3 detector (docs/12 §9) on 2026-11-08.
   Terms: FaceForensics++ (section 4): non-commercial research and
-  educational use only.
-  Round 4 (docs/13) trains its replacement on FaceForensics++ and DF40
-  fakes (CC BY-NC 4.0, section 4); it uses no OpenVid-1M clips (docs/13
-  §6.6 item 9). If it ships, it stays non-commercial and carries their
-  attribution.
+  educational use only. DF40 (section 4): CC BY-NC 4.0; attribution:
+  Z. Yan et al., "DF40: Toward Next-Generation Deepfake Detection",
+  NeurIPS 2024 Datasets and Benchmarks Track.
 
 detector.joblib
   The pulse-consistency face-swap check (G2, reports/g2_detector.md): a
@@ -141,7 +146,7 @@ FaceForensics++, and the DeepFakes Detection Dataset distributed with it
   N. Dufour, A. Gully et al., "DeepFakes Detection Dataset by Google &
   JigSaw", 2019.
 
-DF40 (round 4: training fakes of the face-swap detector v2, if used)
+DF40 (training fakes of the face-swap detector v2, faceswap.joblib)
   Creative Commons Attribution-NonCommercial 4.0 International, for the
   dataset and its code: https://creativecommons.org/licenses/by-nc/4.0/
   Z. Yan, T. Yao, S. Chen, Y. Zhao, X. Fu, J. Zhu, D. Luo, L. Yuan,

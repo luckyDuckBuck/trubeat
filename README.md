@@ -70,13 +70,13 @@ trubeat serve                       # http://127.0.0.1:7860
 ```
 
 Upload a video (**2–120 s**). Each clip goes through independent checks,
-and the verdict says which one decided (docs/11 §4, docs/12):
+and the verdict says which one decided (docs/11 §4, docs/12, docs/13):
 
 | check | what it looks at | needs |
 |-------|------------------|-------|
 | **Content Credentials** | a C2PA manifest declaring AI generation (offline read; re-encoding usually strips it). It decides only when the manifest's signature validates; an unverified claim is shown and the other checks decide | — (the reader, `c2pa-python`, installs with the core package) |
 | **AI-video detector** | the whole frame over time: frozen DINOv2 features, how the clip moves through them (`src/trubeat/aigen.py`) | ≥ 2 s |
-| **face-swap detector** (evidence only) | face crops from 16 frames, frozen CLIP ViT-B/16 features, a linear classifier trained on FaceForensics++ (`src/trubeat/faceswap.py`). Its score is shown but **never decides**: it flagged 38% of real faces from other sources (docs/12 §9) | ≥ 2 s, visible face |
+| **face-swap detector** (evidence only) | face crops from 16 frames, frozen CLIP ViT-B/16 features, a linear classifier trained on FaceForensics++ and DF40 (`src/trubeat/faceswap.py`). Its score is shown but **never decides**: it flagged 16% of real faces from other sources (docs/13 §10) | ≥ 2 s, visible face |
 | **pulse face-swap check** | rPPG consistency across face regions, at a strict threshold (weak: on FaceForensics++ c23 test clips it catches about a quarter of Deepfakes swaps and flags 3 of 135 reals; docs/11 §9.1, §9.6) | ≥ 10 s, visible face |
 
 | verdict | meaning |
@@ -212,21 +212,47 @@ so by that rule it ships as evidence only and never decides. Re-compression
 alone sets it off: after a WhatsApp-like re-encode (640 px, CRF 30) it
 flags 45 of 133 judged real FaceForensics++ test clips, against 1 of 134
 before. It does
-not flag the RepresentUs face-swap ad that started this round. The model is
+not flag the RepresentUs face-swap ad that started this round. It was
 trained on FaceForensics++, whose terms allow non-commercial research use
-only; that applies to `src/trubeat/models/faceswap.joblib` (see NOTICE).
+only (NOTICE).
 
-**Round 4 (docs/13), in progress.** Done so far: the audit fixes to decoding
-and the app (local-only by default; Content Credentials decide only when
-their signature validates), the extension's capture (v1.3.0: the tab at
-its full resolution, up to 1920×1080, and only the playing video's area is
-analysed when it stays put; not released yet), and a two-pass face finder
-(YuNet, then the Face Landmarker on a crop) that finds faces the round-3
-finder missed (`reports/facefind.md`). The finder is adopted for the
-face-swap detector v2; the shipped round-3 detector keeps its own. Detector
-v2 is trained so that re-compression carries no label (docs/13 §3.2). Until
-it passes the adoption rules fixed in docs/13 §6, the shipped face-swap
-detector is the round-3 one, evidence only.
+**2026-11-08 (docs/13): face-swap detector v2, still evidence only.**
+Round 4 retrained the face-swap detector on two sources:
+
+- FaceForensics++ c23 and c40, with every clip also re-encoded four ways,
+  so re-compression carries no label;
+- DF40's fakes from eight newer face-swap methods.
+
+It uses a two-pass face finder (YuNet, then the Face Landmarker on a crop),
+which finds the small faces round 3 missed (`reports/facefind.md`).
+
+On held-out data:
+
+| set | AUC | real clips flagged |
+|---|---|---|
+| FaceForensics++ test | 0.97 (Deepfakes), 0.94 (FaceSwap), 0.92 (FaceShifter) | 1 of 140 judged |
+| the same, after a WhatsApp-like re-encode | | 3 of 140 (round 3: 45 of 133) |
+| DF40 face-swap methods on FaceForensics++ test identities | mean 0.93 | |
+| DeepFakeDetection | 0.82 | 7 of 150 |
+
+It still fails three rules fixed in advance:
+
+- Celeb-DF v2 test-list reals: 20 of 178 flagged (limit 8%);
+- other Celeb-DF v2 reals: 63 of 711 flagged (limit 5%);
+- the frozen list of real non-FaceForensics clips with a face: **61/383 =
+  16%** [13, 20] flagged (limit 3%).
+
+That last rate is less than half of round 3's 38% [33, 44] on the same
+list, so v2 replaced the round-3 model. It stays evidence only and never
+decides. It does not flag the RepresentUs ad either (score +2.71,
+threshold +3.20). A whole analysis of a 15 s 1080p clip takes about 20 s
+on the 2020 laptop it was built on.
+
+This round also brought the audit fixes (local-only by default; Content
+Credentials decide only when their signature validates) and the
+extension's v1.3.0 capture: the tab at its full resolution, up to
+1920×1080, with only the playing video's area analysed when it stays put.
+v1.3.0 is not released yet. Results: `docs/13` §10.
 
 Human gates of the first build (env, dataset forms/downloads, ROI glance,
 gate reviews) are collected in `reports/HUMAN_GATES.md`; each later round
@@ -237,8 +263,9 @@ lists its own (docs/11 §6, docs/12 §2, docs/13 §9).
 The code is MIT: see [LICENSE](LICENSE). The trained models in
 `src/trubeat/models/` are not covered by it: `detector.joblib`,
 `aigen.joblib` and `faceswap.joblib` were trained with FaceForensics++ data,
-whose terms allow non-commercial research and educational use only, so
-these models are for non-commercial use, and the app loads them by default.
+whose terms allow non-commercial research and educational use only, and
+`faceswap.joblib` also with DF40 fakes (CC BY-NC 4.0). So these models are
+for non-commercial use, and the app loads them by default.
 [NOTICE](NOTICE) lists every model file, the backbone weights
 `trubeat fetch-models` downloads, and each dataset's terms and attribution.
 

@@ -84,8 +84,9 @@ evidence-only flag is shown. Also 2026-11-07: `FaceSwapResult.top_frame` /
 `top_box` (the whole sampled frame the most suspicious crop came from, and
 the face box in it) and the matching `PulseAnalysis.fsd_top_frame` /
 `fsd_top_box`; the app shows that frame with the face outlined, after the
-analysis only. Images never travel in the JSON API. The installed bundle is evidence only
-(docs/12 §9).
+analysis only. Images never travel in the JSON API. The installed bundle is evidence only:
+round 3's until 2026-11-08 (docs/12 §9), since then the detector v2 (docs/13 §10; 16% of
+real non-FaceForensics faces flagged).
 
 Since 2026-11-06 `analyze_video` takes an optional
 `progress(fraction, stage)` callback: the web app's progress bar follows
@@ -248,9 +249,10 @@ def analyze(path, bundle, embedder=None, finder=None, progress=None, region=None
 def cnn_weights_path(bundle) -> Path | None  # stage-2 weights whose SHA-256 matches the bundle:
     # next to the bundle, then models/, data/models/, the package, ~/.cache/trubeat
 def fetch_cnn_weights(bundle) -> Path        # `trubeat fetch-models`: download + SHA-256 check
-# bundle["mode"] (decisive | evidence) is written only by `scripts/train_faceswap.py ship`,
-# which applies docs/12 §6 to gates 1-3 (Colab) and gate 4 (scripts/check_faceswap_reals.py)
-# and records the gate-4 result as bundle["gate4"] = {k, n, rate, ci, passed, bundle_sha256, ...}
+# bundle["mode"] (decisive | evidence) is written only by a `ship` step: round 3's
+# `scripts/train_faceswap.py ship` (docs/12 §6), since round 4 `scripts/train_faceswap_v2.py ship`
+# (docs/13 §6.3: the frozen gate-4a list, the bundle's own claims); both record the gate-4
+# result as bundle["gate4"] = {k, n, rate, ci, passed, bundle_sha256, ...}
 ```
 
 ## 5. Key design numbers

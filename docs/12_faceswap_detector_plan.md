@@ -11,7 +11,9 @@ face-swap result exists.
 **Result (2026-11-07, §9):** gates 1–3 passed, gate 4 failed (38% of real
 non-FaceForensics faces flagged; a WhatsApp-like re-encode alone makes it
 flag 32% of real FaceForensics++ test clips), so the detector ships as
-**evidence only**: its score is shown, it never decides.
+**evidence only**: its score is shown, it never decides. **Superseded
+2026-11-08** by the detector v2 of round 4 (docs/13 §10: 16% of those real
+faces flagged, 2% after the re-encode; still evidence only).
 
 ---
 

@@ -23,7 +23,7 @@ re-verified against the cited papers, datasets, and tools (Oct 2026).
 | 10 | [Agent Execution Plan](10_agent_execution_plan.md) | The ordered autonomous task backlog for the coding agent |
 | 11 | [Audit and Improvement Plan](11_audit_and_improvement_plan.md) | Why verdicts came back Inconclusive, what was broken, the AI-generated-video detector and every measured result since (approved 2026-11-01; executed) |
 | 12 | [Face-swap Detector Plan](12_faceswap_detector_plan.md) | Round 3: a face-crop face-swap detector trained online (Colab), a title-card guard, and the decision rules fixed before any result (approved 2026-11-06). Result 2026-11-07: evidence only (§9) |
-| 13 | [Face-swap v2 + Audit Plan](13_faceswap_v2_and_audit_plan.md) | Round 4: processing-invariant face-swap detector v2 (variants, modern methods, rules fixed first), a two-pass face finder for small faces, the extension's capture cropped to the video, and 88 audit findings with their fixes (approved 2026-11-07; in progress) |
+| 13 | [Face-swap v2 + Audit Plan](13_faceswap_v2_and_audit_plan.md) | Round 4: processing-invariant face-swap detector v2 (variants, modern methods, rules fixed first), a two-pass face finder for small faces, the extension's capture cropped to the video, and 88 audit findings with their fixes (approved 2026-11-07; result 2026-11-08 in §10: v2 replaces round 3, still evidence only) |
 
 Also see [`AGENTS.md`](../AGENTS.md) at the repo root — the agent's operating
 manual (read by OpenCode natively).

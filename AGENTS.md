@@ -13,13 +13,13 @@ videos that fail. Python, laptop-first, free tooling only.
 That is where the project started, not what decides today. `app.verdict_for`
 takes the first layer that fires: Content Credentials (C2PA) whose signature
 validates; the whole-frame AI-video detector ("Likely AI-generated"); a
-face-swap detector whose bundle is decisive (the shipped round-3 bundle is
-evidence only: shown, never deciding); else the pulse-consistency check at
+face-swap detector whose bundle is decisive (the shipped detector v2 of
+round 4 is evidence only: shown, never deciding); else the pulse-consistency check at
 a strict threshold ("Possible face-swap", weak). If the AI-video detector
 ran and nothing fired, the headline is "No sign of AI generation found",
 never a claim that the video is real or authentic.
 Heart rate and pulse SNR are evidence only. Plans and measured results since
-the first build: `docs/11`, `docs/12`, and `docs/13` (round 4, in progress).
+the first build: `docs/11`, `docs/12`, and `docs/13` (round 4; result in §10).
 
 ## 2. First-read order (every session)
 
