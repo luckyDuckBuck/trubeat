@@ -231,3 +231,20 @@ def test_the_laptop_runner_waits_out_a_drive_quota_and_stops_on_other_failures(m
     monkeypatch.setattr(r.subprocess, "run", lambda *a, **k: __import__("types").SimpleNamespace(returncode=1))
     with pytest.raises(SystemExit, match="exit 1"):
         r.fetch(["fetch"], "https://drive.example/zip", "DF40 x")
+
+
+def test_gate4a_vectors_are_computed_once_per_key(tmp_path):
+    calls = []
+
+    def compute():
+        calls.append(1)
+        return [np.ones(4, np.float32), np.zeros(4, np.float32)], [{"path": "a", "error": "", "has_vector": True}]
+
+    cache = tmp_path / "v.npz"
+    vecs, rows = t.cached_vectors(cache, "k1", compute)
+    again, rows2 = t.cached_vectors(cache, "k1", compute)
+    assert len(calls) == 1 and rows2 == rows and np.array_equal(np.stack(again), np.stack(vecs))
+    t.cached_vectors(cache, "k2", compute)          # another frozen list or crop setting: recomputed
+    assert len(calls) == 2
+    t.cached_vectors(None, "k1", compute)           # no cache asked for
+    assert len(calls) == 3

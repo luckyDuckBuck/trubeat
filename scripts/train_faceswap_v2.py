@@ -946,6 +946,26 @@ def unit_rows(vectors) -> np.ndarray:
     return X / np.maximum(np.linalg.norm(X, axis=1, keepdims=True), 1e-12)
 
 
+def cached_vectors(cache: Path | None, key: str, compute) -> tuple[list[np.ndarray], list[dict]]:
+    """``compute()`` once per ``key``: the gate-4a clips' vectors depend only on
+    the frozen list, the backbone and the crop settings, not on the DF40
+    reference, so a rerun of the overlap check after a new selection reuses
+    them (a local npz under runs/; the clips never leave the laptop)."""
+    if cache is not None and cache.is_file():
+        with np.load(cache, allow_pickle=False) as z:
+            if str(z["key"]) == key:
+                log(f"  gate-4a vectors from {cache}")
+                return list(z["vecs"]), json.loads(str(z["rows"]))
+    vecs, rows = compute()
+    if cache is not None:
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        tmp = cache.with_name(cache.name + ".tmp.npz")
+        np.savez(tmp, key=np.array(key), vecs=np.stack(vecs) if vecs else np.zeros((0, 0), np.float32),
+                 rows=np.array(json.dumps(rows)))
+        os.replace(tmp, cache)
+    return vecs, rows
+
+
 def nearest(A: np.ndarray, B: np.ndarray, chunk: int = 4096) -> tuple[np.ndarray, np.ndarray]:
     """For each unit row of A: the highest cosine with a unit row of B, and its index."""
     best, arg = np.full(len(A), -np.inf, np.float32), np.zeros(len(A), int)
@@ -1500,14 +1520,22 @@ def cmd_overlap(a) -> None:
     R, ids, backbone = unit_rows(ref["cls"].astype(np.float32)), ref["video_id"].astype(str), str(ref["backbone"])
     thr = float(cfg["dedupe"]["threshold"])
     paths, _ = cfr.frozen_list(a.manifest)
-    vecs, rows = [], []
-    with mp.get_context("spawn").Pool(a.workers, initializer=_overlap_init, initargs=(cfg, backbone)) as pool:
-        for k, (path, vec, err) in enumerate(pool.imap(_overlap_one, paths, chunksize=2), 1):
-            rows.append({"path": path, "error": err, "has_vector": vec is not None})
-            if vec is not None:
-                vecs.append(vec)
-            if k % 100 == 0:
-                log(f"  {k}/{len(paths)}")
+
+    def compute() -> tuple[list[np.ndarray], list[dict]]:
+        vecs, rows = [], []
+        with mp.get_context("spawn").Pool(a.workers, initializer=_overlap_init, initargs=(cfg, backbone)) as pool:
+            for k, (path, vec, err) in enumerate(pool.imap(_overlap_one, paths, chunksize=2), 1):
+                rows.append({"path": path, "error": err, "has_vector": vec is not None})
+                if vec is not None:
+                    vecs.append(vec)
+                if k % 100 == 0:
+                    log(f"  {k}/{len(paths)}")
+        return vecs, rows
+
+    key = json.dumps({"manifest_sha256": hashlib.sha256(Path(a.manifest).read_bytes()).hexdigest(),
+                      "backbone": backbone, "n_frames": cfg["n_frames"], "window_s": cfg["window_s"],
+                      "crop_size": cfg["crop_size"], "finder": inference_cfg(cfg)}, sort_keys=True, default=str)
+    vecs, rows = cached_vectors(Path(a.vectors) if a.vectors else None, key, compute)
     G = unit_rows(vecs)
     best_df40, arg_df40 = nearest(R, G)            # each DF40 training clip vs every gate-4a clip
     best_gate, _ = nearest(G, R)
@@ -1656,6 +1684,8 @@ def main() -> None:
     o.add_argument("--out", default=str(REPO / "reports/faceswap_v2_overlap.json"))
     o.add_argument("--exclude-out", default=str(REPO / "runs/faceswap/v2_exclude.txt"))
     o.add_argument("--workers", type=int, default=3)
+    o.add_argument("--vectors", default=None, help="npz cache of the gate-4a clips' vectors (reused while the "
+                                                     "frozen list, backbone and crop settings are unchanged)")
     o.add_argument("--config", default=None)
     sh = sub.add_parser("ship", help="apply docs/13 §6.3 and write the bundle the app loads")
     sh.add_argument("--bundle", required=True)
