@@ -1270,7 +1270,9 @@ def versions() -> dict:
     for mod in ("torch", "timm", "mediapipe", "sklearn", "numpy", "cv2", "pandas"):
         try:
             m = __import__(mod)
-            out[mod] = getattr(m, "__version__", "?")
+            # str(): torch.__version__ is a TorchVersion, which would make the
+            # bundle need torch just to unpickle (a core install has none)
+            out[mod] = str(getattr(m, "__version__", "?"))
         except Exception:  # noqa: BLE001
             out[mod] = None
     try:

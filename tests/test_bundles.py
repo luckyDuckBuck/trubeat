@@ -292,3 +292,23 @@ def test_faceswap_bundle_with_its_real_backbone(tmp_path, monkeypatch, fs_bundle
     p = synth.write_pulse_video(tmp_path / "v.mp4", fps=30.0, duration_s=3.0)
     r = fs.analyze(p, fs_bundle, embedder=emb, finder=_CentreFinder())
     assert r.label in ("swap", "no_swap") and np.isfinite(r.score) and 0.0 <= r.real_percentile <= 1.0
+
+
+@pytest.mark.parametrize("name", ["faceswap.joblib", "aigen.joblib", "detector.joblib"])
+def test_packaged_bundles_load_without_torch(name, monkeypatch):
+    # 2026-11-08: a TorchVersion in bundle["versions"] made the shipped face-swap
+    # bundle need torch to unpickle, so on a core install (no torch) its claims,
+    # and the caveat built from them, were lost
+    import joblib
+    import joblib.numpy_pickle as npk
+
+    seen: list[str] = []
+    orig = npk.NumpyUnpickler.find_class
+
+    def find_class(self, module, cls):
+        seen.append(module)
+        return orig(self, module, cls)
+
+    monkeypatch.setattr(npk.NumpyUnpickler, "find_class", find_class)
+    joblib.load(Path(fs.__file__).parent / "models" / name)
+    assert not [m for m in seen if m.split(".")[0] in ("torch", "timm", "mediapipe")]

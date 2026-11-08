@@ -793,7 +793,8 @@ and 2b pass; 3b, 4a and 4b fail. On the same frozen list, v2 flags 15.9%
 [12.6, 19.9] where round 3 flagged 115/300 = 38.3% [33.0, 43.9]. The
 intervals do not overlap, so `ship` wrote v2 as
 `src/trubeat/models/faceswap.joblib` (`mode: evidence`, SHA-256
-`3c125d70…`).
+`aa356fdb…`; re-saved 2026-11-09 with its package versions as plain strings, so a core
+install without torch can read it: model, threshold and claims unchanged).
 
 The face-swap layer still never decides the verdict; the pulse check
 decides as before (docs/12 §5 B). The caveat, and the extension's fallback
