@@ -817,8 +817,8 @@ only when gate 1, 2 or 2b fails.
   | v3 (the extension's VP9 capture) | 0.7% | 0.975 |
   | v4 (upscaled re-upload) | 0.0% | 0.965 |
 
-  Round 3's WhatsApp-like false alarms were 45/140 = 32.1% (docs/12 §9);
-  v2's are 3/140 = 2.1%.
+  Round 3's WhatsApp-like false alarms were 45/133 judged = 33.8%
+  [26.3, 42.2] (docs/12 §9, correction); v2's are 3/140 judged = 2.1%.
 - **DFD under processing:** reals flagged 4.7% (v0) to 9.3% (c40); AUC
   0.58 (v1) to 0.82 (v0).
 - **DF40, FF++ test identities:**
