@@ -31,7 +31,7 @@ from pathlib import Path
 import numpy as np
 
 from .errors import ModelMissing, ShortVideo, UnreadableVideo
-from .facefind import FINDER_DEFAULTS, TwoPassFinder, square_box
+from .facefind import FINDER_DEFAULTS, TwoPassFinder, crop_window, square_box
 
 DEFAULT_CONFIG: dict = {
     "n_frames": 16,
@@ -206,8 +206,7 @@ def cut_square(rgb: np.ndarray, cx: float, cy: float, side: float, size: int) ->
     import cv2
 
     h, w = rgb.shape[:2]
-    s = max(1, _ri(side))
-    x0, y0 = _ri(cx - s / 2.0), _ri(cy - s / 2.0)
+    x0, y0, s = crop_window(cx, cy, side)    # the one window rule (facefind maps landmarks back with it)
     out = np.zeros((s, s, 3), dtype=np.uint8)
     sx0, sy0, sx1, sy1 = max(0, x0), max(0, y0), min(w, x0 + s), min(h, y0 + s)
     if sx1 > sx0 and sy1 > sy0:
@@ -293,8 +292,8 @@ def face_crops(sampled: SampledFrames, finder: FaceFinder, config: dict | None =
             continue
         cx, cy, side = box
         crop = cut_square(rgb, cx, cy, side, int(cfg["crop_size"]))
-        s = _ri(side)
-        out.append(FaceCrop(crop, idx, t, (_ri(cx - s / 2), _ri(cy - s / 2), s, s)))
+        x0, y0, s = crop_window(cx, cy, side)
+        out.append(FaceCrop(crop, idx, t, (x0, y0, s, s)))
     return out
 
 

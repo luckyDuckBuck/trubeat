@@ -24,7 +24,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import multiprocessing as mp
 import sys
@@ -61,11 +60,9 @@ def score(path: str) -> tuple[str, str, float | None, int, str]:
 
 
 def sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
+    from trubeat.claims import file_sha256
+
+    return file_sha256(path)
 
 
 def frozen_list(manifest: str) -> tuple[list[str], dict[str, str]]:
@@ -134,7 +131,7 @@ def main() -> None:
         rule = "<= 3%, n >= 200"
     b = fs.load_bundle(args.bundle)
     cfg = fs.merged_config(b["config"])
-    bsha = hashlib.sha256(Path(args.bundle).read_bytes()).hexdigest()
+    bsha = sha256(Path(args.bundle))
     L = [f"# Face-swap detector, gate 4{'a' if args.manifest else ''} — {time.strftime('%Y-%m-%d %H:%M')}", "",
          (f"Bundle `{Path(args.bundle).name}` (SHA-256 `{bsha[:12]}…`; {b.get('kind', 'probe')}, backbone "
           f"{cfg['backbone']}, {cfg['feature']}, finder {cfg['finder']}, threshold {b['threshold']:+.4f})."), "",

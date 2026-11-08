@@ -1283,15 +1283,10 @@ def versions() -> dict:
 
 def weights_sha(backbone: str) -> str | None:
     from trubeat import aigen
+    from trubeat.claims import file_sha256
 
     p = aigen.cached_weights(backbone)
-    if not p:
-        return None
-    h = hashlib.sha256()
-    with open(p, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
+    return file_sha256(p) if p else None
 
 
 def cmd_select(a) -> None:
