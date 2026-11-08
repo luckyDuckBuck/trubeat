@@ -219,40 +219,76 @@ def test_region_crops_before_anything_else(tmp_path):
     assert vs.frames.shape[1:3] == (240, 160) and vs.frames.mean() > 150
 
 
+class _FakeWebm:
+    """A MediaRecorder WebM as OpenCV sees it: -2**63 frames at "1000 fps",
+    1280x720, 30 fps by timestamp, 20 s."""
+
+    def __init__(self, path):
+        self.i = -1
+
+    def isOpened(self):
+        return True
+
+    def get(self, prop):
+        import cv2
+
+        return {cv2.CAP_PROP_FPS: 1000.0, cv2.CAP_PROP_FRAME_COUNT: -9.223372036854776e18,
+                cv2.CAP_PROP_POS_MSEC: self.i * 1000.0 / 30.0}.get(prop, 0.0)
+
+    def read(self):
+        if self.i + 1 >= 600:
+            return False, None
+        self.i += 1
+        return True, np.full((720, 1280, 3), self.i % 255, np.uint8)
+
+    def grab(self):
+        ok, _ = self.read()
+        return ok
+
+    def release(self):
+        pass
+
+
 def test_webm_without_a_frame_count_is_downscaled_and_bounded(monkeypatch):
     # docs/13 A-01: a MediaRecorder WebM (-2**63 frames at "1000 fps") skipped
     # the downscale and the byte budget, holding every native frame twice.
-    import cv2
-
     import trubeat.ingest as ingest_mod
 
-    class FakeCapture:                                  # 1280x720, 30 fps by timestamp, 20 s
-        def __init__(self, path):
-            self.i = -1
-
-        def isOpened(self):
-            return True
-
-        def get(self, prop):
-            return {cv2.CAP_PROP_FPS: 1000.0, cv2.CAP_PROP_FRAME_COUNT: -9.223372036854776e18,
-                    cv2.CAP_PROP_POS_MSEC: self.i * 1000.0 / 30.0}.get(prop, 0.0)
-
-        def read(self):
-            if self.i + 1 >= 600:
-                return False, None
-            self.i += 1
-            return True, np.full((720, 1280, 3), self.i % 255, np.uint8)
-
-        def grab(self):
-            ok, _ = self.read()
-            return ok
-
-        def release(self):
-            pass
-
-    monkeypatch.setattr(ingest_mod.cv2, "VideoCapture", FakeCapture)
+    monkeypatch.setattr(ingest_mod.cv2, "VideoCapture", _FakeWebm)
     monkeypatch.setattr(ingest_mod.Path, "is_file", lambda self: True)
     vs = open_video("capture.webm", max_seconds=15.0)
     assert vs.frames.shape[1:3] == (480, 853)          # downscaled like any other clip
     assert abs(vs.fps - 30.0) < 0.5 and vs.truncated and 14.9 <= vs.duration_s <= 15.1
     assert (vs.width, vs.height) == (853, 480)
+
+
+def test_webm_budget_cut_fills_one_buffer_and_says_so(monkeypatch):
+    # review 2026-11-08: frames of a capture with no frame count went into a
+    # list and were copied by np.stack at the end (2x the budget at peak);
+    # now they go straight into one buffer, and the cut is reported
+    import trubeat.ingest as ingest_mod
+
+    monkeypatch.setattr(ingest_mod.cv2, "VideoCapture", _FakeWebm)
+    monkeypatch.setattr(ingest_mod.Path, "is_file", lambda self: True)
+    import tracemalloc
+
+    monkeypatch.setattr(ingest_mod, "MAX_DECODED_BYTES", 853 * 480 * 3 * 400)   # room for 400 frames
+    tracemalloc.start()
+    try:
+        vs = open_video("capture.webm")
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert vs.n_frames == 400 and vs.truncated
+    assert peak < 1.3 * vs.frames.nbytes          # was ~2x: the list plus its np.stack copy
+    assert ingest_mod.truncation_warning(vs).startswith("W_TRUNCATED: decoded the first 13s")
+
+
+def test_truncation_warning_only_for_a_cut_stream():
+    from trubeat.ingest import VideoStream, truncation_warning
+
+    frames = np.zeros((1, 2, 2, 3), np.uint8)
+    whole = VideoStream(frames, 30.0, 300, 2, 2, 10.0, "a.mp4")
+    cut = VideoStream(frames, 30.0, 360, 2, 2, 12.0, "b.mp4", truncated=True, full_duration_s=95.0)
+    assert truncation_warning(whole) is None
+    assert truncation_warning(cut).startswith("W_TRUNCATED: decoded the first 12s of about 95s")

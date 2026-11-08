@@ -37,6 +37,9 @@ def _feat_for_video(path, config):
     """Shared wiring: video → windowed feature DataFrame."""
     method = config.get("method", "pos")
     stream = ingest.open_video(path)
+    cut = ingest.truncation_warning(stream)
+    if cut:   # training on part of a clip is allowed, never silent (AGENTS.md §5)
+        print(f"{Path(path).name}: {cut}", file=sys.stderr)
     landmarks, valid = face.track_landmarks(stream.frames, stream.fps)
     traces = roi.extract_roi_means(stream.frames, landmarks, valid, roi.ROI_DEFS_P1)
     ppg = signal.extract_ppg(traces, stream.fps, method=method)
@@ -56,12 +59,14 @@ def cmd_hr(args):
     traces = roi.extract_roi_means(stream.frames, landmarks, valid, roi.ROI_DEFS_P1)
     ppg = signal.extract_ppg(traces, stream.fps, method=method)
     res = hrmod.estimate_hr(np.nanmean(ppg, axis=1), stream.fps, band=band)
+    cut = ingest.truncation_warning(stream)
     print(json.dumps(_jsonable({
         "bpm": round(float(res.bpm), 1),
         "confidence": round(float(res.confidence), 3),
         "fps": float(stream.fps),
         "duration_s": round(float(stream.duration_s), 1),
         "face_valid_frac": round(float(np.mean(valid)), 3),
+        "warnings": [cut] if cut else [],
     })))
 
 

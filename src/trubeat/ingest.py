@@ -28,6 +28,10 @@ MAX_TRUSTED_FPS = 240.0  # metadata above this (e.g. ~1000) is never trusted
 # Before 2026-11-07 (docs/13 A-17) the HEIGHT was capped, which shrank
 # vertical phone video to 270x480.
 DEFAULT_FRAME_HEIGHT = 480
+# Bumped whenever the decoded pixels change for the same file and
+# frame_height (2: the short-side rule above). Caches keyed on decoded
+# frames (scripts/cache_traces.py) include it, so older entries go stale.
+DECODE_RULE_VERSION = 2
 
 # Ceiling on the decoded buffer. Decoding stops when it is reached and the
 # stream says so (``truncated``); a budget that cannot hold even one frame
@@ -48,6 +52,17 @@ class VideoStream:
     # the byte budget); full_duration_s is the container's estimate, if known.
     truncated: bool = False
     full_duration_s: float | None = None
+
+
+def truncation_warning(stream: VideoStream) -> str | None:
+    """The W_TRUNCATED text for a stream that stopped before the end of its
+    clip, else None. Every caller reports it (AGENTS.md §5: a cut is never
+    silent); the app words its own for the pulse layer."""
+    if not stream.truncated:
+        return None
+    whole = f" of about {stream.full_duration_s:.0f}s" if stream.full_duration_s else ""
+    return (f"W_TRUNCATED: decoded the first {stream.duration_s:.0f}s{whole} "
+            f"(the seconds limit or the {MAX_DECODED_BYTES / 1e9:.1f} GB decoded-frame budget)")
 
 
 def decode_scale(w: int, h: int, frame_height: int | None) -> float:
@@ -232,13 +247,11 @@ def open_video(
                 frame = cv2.resize(frame, (w, h), interpolation=cv2.INTER_AREA)
             return frame[:, :, ::-1]
 
-        frames = np.empty((cap_frames, h, w, 3), dtype=np.uint8) if n_meta > 0 else None
-        kept: list[np.ndarray] = []
-        first_rgb = (cv2.resize(first, (w, h), interpolation=cv2.INTER_AREA) if scale < 1.0 else first)[:, :, ::-1]
-        if frames is not None:
-            frames[0] = first_rgb
-        else:
-            kept.append(np.ascontiguousarray(first_rgb))
+        # One buffer of the cap, also when the container gives no frame count
+        # (a MediaRecorder WebM): its pages are committed only as frames are
+        # written, so peak memory stays at the decoded frames, never 2x.
+        frames = np.empty((cap_frames, h, w, 3), dtype=np.uint8)
+        frames[0] = (cv2.resize(first, (w, h), interpolation=cv2.INTER_AREA) if scale < 1.0 else first)[:, :, ::-1]
         n = 1
         while True:
             if n >= cap_frames:
@@ -256,19 +269,12 @@ def open_video(
                 truncated = True
                 break
             last_ms = t_ms
-            if frames is not None:
-                frames[n] = _prep(frame)
-            else:
-                kept.append(np.ascontiguousarray(_prep(frame)))
+            frames[n] = _prep(frame)
             n += 1
             if progress is not None and n % 24 == 0 and n_meta > 0:
                 progress(n, min(n_meta, cap_frames))
-        if frames is not None:
-            if n < len(frames):          # metadata overcounted, or we stopped early
-                frames = np.ascontiguousarray(frames[:n])
-        else:
-            frames = np.stack(kept, axis=0)
-            del kept
+        if n < len(frames):          # a view: no copy (the unwritten tail was never committed)
+            frames = frames[:n]
     finally:
         cap.release()
     fps_meta = fps

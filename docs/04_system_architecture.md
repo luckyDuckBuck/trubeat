@@ -309,7 +309,7 @@ evidence and never changes a verdict by itself:
 | `W_NO_C2PA_LIB` / `W_C2PA_READ` | provenance reader missing / failed; treated as "no credentials" |
 | `W_PULSE_SKIPPED` / `W_PULSE_FAILED` / `W_FACESWAP_FAILED` | pulse or face-swap layer did not run (e.g. `E_SHORT_VIDEO` under 10 s) or raised |
 | `W_UNSTABLE_TRACK` | the pulse layer tracked the face in fewer than 70% of frames; its face-swap check does not run (emitted by the app since 2026-11-07) |
-| `W_TRUNCATED` | the pulse layer analysed only the first part of the clip (120 s, or less when the decoded-frame budget ran out); says how much |
+| `W_TRUNCATED` | decoding stopped before the end of the clip, and the result covers only its first part: in the app the pulse layer (120 s, or less when the decoded-frame budget ran out); in `predict`, `hr`, eval and `cache_traces` the decoded-frame budget (`ingest.truncation_warning`, since 2026-11-08); says how much |
 | `W_SKLEARN_VERSION` | a model bundle was saved with another scikit-learn major.minor than the installed one; its scores may differ from the evaluated ones (emitted since 2026-11-07, docs/13 D-05) |
 | `W_GRAPHICS_SKIPPED` | the AI-video layer skipped title-card / graphic segments and scored a later one (docs/12 item A) |
 | `E_GRAPHICS_ONLY` | every candidate segment in the first 30 s was a graphic; the AI-video layer did not score |

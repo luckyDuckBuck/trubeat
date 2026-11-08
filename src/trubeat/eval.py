@@ -3,8 +3,10 @@
 import hashlib
 import json
 import os
+import warnings as _warnings
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -101,6 +103,9 @@ def _extract_ppg(path: str, config: dict) -> tuple[np.ndarray, float]:
     stream = ingest.open_video(
         path, frame_height=config.get("frame_height", ingest.DEFAULT_FRAME_HEIGHT)
     )
+    cut = ingest.truncation_warning(stream)
+    if cut:   # the HR estimate then covers part of the clip: say so (AGENTS.md §5)
+        _warnings.warn(f"{Path(path).name}: {cut}", stacklevel=2)
     landmarks, valid = face.track_landmarks(stream.frames, stream.fps)
     traces = roi.extract_roi_means(
         stream.frames, landmarks, valid, config.get("roi_defs", roi.ROI_DEFS_P1)

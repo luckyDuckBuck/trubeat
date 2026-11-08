@@ -42,8 +42,9 @@ def cache_key(video_path: Path, roi_defs: dict, method: str,
     h.update(hash_file(video_path).encode())
     h.update(json.dumps(roi_defs, sort_keys=True).encode())
     h.update(method.encode())
-    # Frame height changes the decoded pixels -> must invalidate the cache.
+    # Frame height and the decode rule change the decoded pixels -> must invalidate the cache.
     h.update(f"fh={frame_height}".encode())
+    h.update(f"decode={ingest.DECODE_RULE_VERSION}".encode())
     return h.hexdigest()[:16]
 
 
@@ -69,16 +70,18 @@ def process_one(video_path: Path, roi_defs: dict, method: str,
     face_valid_frac = float(np.mean(valid))
     traces = roi.extract_roi_means(stream.frames, landmarks, valid, roi_defs)
     ppg = signal.extract_ppg(traces, stream.fps, method=method)
+    cut = ingest.truncation_warning(stream)   # a cached trace of part of a clip says so
     return {
         "traces": traces,  # (T, R, 3) float64, NaN where face invalid
         "ppg": ppg,        # (T, R) float64
         "fps": stream.fps,
         "n_frames": stream.n_frames,
+        "truncated": bool(stream.truncated),
         "qc": {
             "face_valid_frac": round(face_valid_frac, 4),
             "mean_snr": round(_mean_snr(ppg, stream.fps), 3),
             "warnings": (
-                ["W_UNSTABLE_TRACK"] if face_valid_frac < 0.7 else []
+                (["W_UNSTABLE_TRACK"] if face_valid_frac < 0.7 else []) + ([cut] if cut else [])
             ),
         },
     }
@@ -128,12 +131,13 @@ def main() -> None:
         )
         json_path.write_text(json.dumps({
             "video_id": vid, "cache_key": key, "method": args.method,
-            "roi_defs": list(roi_defs), **payload["qc"],
+            "roi_defs": list(roi_defs), "truncated": payload["truncated"], **payload["qc"],
         }, indent=1))
         done += 1
         print(f"cached {vid} "
               f"(valid={payload['qc']['face_valid_frac']:.2f}, "
-              f"snr={payload['qc']['mean_snr']:.1f})")
+              f"snr={payload['qc']['mean_snr']:.1f})"
+              + (f"; {payload['qc']['warnings'][-1]}" if payload["truncated"] else ""))
     print(f"done={done} skipped={skipped} failed={failed}")
 
 

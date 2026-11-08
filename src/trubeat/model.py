@@ -111,6 +111,9 @@ def predict_video(path: str, model, config: dict) -> Prediction:
     stream = ingest.open_video(
         path, frame_height=config.get("frame_height", ingest.DEFAULT_FRAME_HEIGHT)
     )
+    cut = ingest.truncation_warning(stream)
+    if cut:
+        warnings.append(cut)
     landmarks, valid = face.track_landmarks(stream.frames, stream.fps)
     if not np.any(valid):
         # No face in any frame: nothing to analyze. Surface the designed

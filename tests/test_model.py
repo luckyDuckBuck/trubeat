@@ -65,6 +65,7 @@ def test_predict_video_majority_vote():
         3
     ] as m_sig, patches[4] as m_feat, patches[5] as m_hr:
         m_ing.open_video.return_value = stream
+        m_ing.truncation_warning.return_value = None
         m_face.track_landmarks.return_value = (landmarks, valid)
         m_roi.extract_roi_means.return_value = np.zeros((300, 3, 3))
         m_sig.extract_ppg.return_value = np.zeros((300, 3))
@@ -90,6 +91,7 @@ def test_predict_video_numeric_labels_mapped():
         3
     ] as m_sig, patches[4] as m_feat, patches[5] as m_hr:
         m_ing.open_video.return_value = stream
+        m_ing.truncation_warning.return_value = None
         m_face.track_landmarks.return_value = (landmarks, valid)
         m_roi.extract_roi_means.return_value = np.zeros((300, 3, 3))
         m_sig.extract_ppg.return_value = np.zeros((300, 3))
@@ -108,6 +110,7 @@ def test_predict_video_unstable_track_warning():
         3
     ] as m_sig, patches[4] as m_feat, patches[5] as m_hr:
         m_ing.open_video.return_value = stream
+        m_ing.truncation_warning.return_value = None
         m_face.track_landmarks.return_value = (landmarks, valid)
         m_roi.extract_roi_means.return_value = np.zeros((300, 3, 3))
         m_sig.extract_ppg.return_value = np.zeros((300, 3))
@@ -134,6 +137,7 @@ def test_predict_video_raises_no_face_when_never_tracked():
     model = MagicMock()
     with patches[0] as m_ing, patches[1] as m_face:
         m_ing.open_video.return_value = stream
+        m_ing.truncation_warning.return_value = None
         m_face.track_landmarks.return_value = (landmarks, valid)
         with pytest.raises(NoFace) as exc_info:
             predict_video("vid.mp4", model, {})
@@ -163,6 +167,7 @@ def test_predict_video_accepts_the_bundled_g2_detector():
         3
     ] as m_sig, patches[4] as m_feat, patches[5] as m_hr:
         m_ing.open_video.return_value = stream
+        m_ing.truncation_warning.return_value = None
         m_face.track_landmarks.return_value = (landmarks, valid)
         m_roi.extract_roi_means.return_value = np.zeros((300, 3, 3))
         m_sig.extract_ppg.return_value = np.zeros((300, 3))
@@ -183,6 +188,7 @@ def test_predict_video_names_missing_trained_columns():
         3
     ] as m_sig, patches[4] as m_feat:
         m_ing.open_video.return_value = stream
+        m_ing.truncation_warning.return_value = None
         m_face.track_landmarks.return_value = (landmarks, valid)
         m_roi.extract_roi_means.return_value = np.zeros((300, 3, 3))
         m_sig.extract_ppg.return_value = np.zeros((300, 3))
