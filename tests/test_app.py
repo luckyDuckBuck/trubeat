@@ -592,3 +592,13 @@ def test_a_capture_outlives_its_analysis_long_enough_for_a_retry(tmp_path):
     while cap.exists() and time.time() < deadline:
         time.sleep(0.02)
     assert not cap.exists() and key not in app_mod._CAPTURES
+
+
+def test_the_extensions_fallback_caveat_is_the_apps():
+    # the overlay shows its copy of app.CAVEAT when a reply carries none: a model
+    # change must update both, word for word (review 2026-11-08)
+    import re
+
+    js = (Path(__file__).parents[1] / "extension" / "overlay.js").read_text()
+    m = re.search(r'const STANDING_CAVEAT =\s*((?:"(?:[^"\\]|\\.)*"\s*\+?\s*)+);', js)
+    assert m and "".join(re.findall(r'"((?:[^"\\]|\\.)*)"', m.group(1))) == app_mod.CAVEAT
