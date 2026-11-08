@@ -1,5 +1,6 @@
 """Video ingest: decode + metadata. FR-01, FR-02."""
 
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -104,12 +105,17 @@ class Probe:
     width: int
     height: int
     from_metadata: bool
+    # True when the grab pass hit ``max_wall_s``: n_frames and duration_s are
+    # then the counted rate extrapolated to ``max_seconds`` (an upper bound).
+    estimated: bool = False
 
 
-def probe(path: str | Path, max_seconds: float | None = None) -> Probe:
+def probe(path: str | Path, max_seconds: float | None = None, max_wall_s: float | None = None) -> Probe:
     """Frame rate, frame count and duration, from metadata when it is sane,
-    else from the timestamps of a grab-only pass (up to ``max_seconds``).
-    Never raises: an unreadable file gives zeros."""
+    else from the timestamps of a grab-only pass (up to ``max_seconds`` of
+    video, and up to ``max_wall_s`` of wall time: grabbing decodes, so a 120 s
+    WebM costs about as much as decoding it; the progress bar needs only an
+    estimate). Never raises: an unreadable file gives zeros."""
     cap = cv2.VideoCapture(str(path))
     try:
         if not cap.isOpened():
@@ -120,7 +126,8 @@ def probe(path: str | Path, max_seconds: float | None = None) -> Probe:
         if np.isfinite(fps) and 0 < fps <= MAX_TRUSTED_FPS and n > 0:
             return Probe(fps, n, n / fps, w, h, True)
         limit = float(max_seconds) * 1000.0 if max_seconds else float("inf")
-        count, first, last = 0, None, None
+        deadline = time.monotonic() + max_wall_s if max_wall_s else None
+        count, first, last, cut = 0, None, None, False
         while cap.grab():
             t = float(cap.get(cv2.CAP_PROP_POS_MSEC))
             first = t if first is None else first
@@ -128,9 +135,15 @@ def probe(path: str | Path, max_seconds: float | None = None) -> Probe:
                 break
             last = t
             count += 1
+            if deadline is not None and count % 16 == 0 and time.monotonic() > deadline:
+                cut = True
+                break
     finally:
         cap.release()
     rate = _choose_fps(fps if np.isfinite(fps) and fps > 0 else 0.0, count, first, last)
+    if cut and rate > 0 and max_seconds:
+        n = max(count, round(rate * float(max_seconds)))
+        return Probe(rate, n, n / rate, w, h, False, estimated=True)
     return Probe(rate, count, count / rate if rate > 0 else 0.0, w, h, False)
 
 

@@ -125,11 +125,16 @@ class _ProgressPlan:
         self.fn(min(0.99, a + (b - a) * max(0.0, min(1.0, frac))), desc)
 
 
+PROBE_WALL_S = 1.0   # wall-time cap on the progress plan's frame count
+
+
 def _frame_count(path: Path, max_seconds: float = MAX_ANALYSIS_SECONDS) -> tuple[int, float]:
     """(frames, fps) for the progress plan: container metadata when it is
     sane, else counted from frame timestamps (the extension's WebM reports
-    -2**63 frames at "1000 fps"; docs/13 A-08). (0, 0.0) when unreadable."""
-    pr = ingest.probe(path, max_seconds=max_seconds)
+    -2**63 frames at "1000 fps"; docs/13 A-08), for at most PROBE_WALL_S of
+    wall time and then extrapolated to ``max_seconds`` (a full count would
+    decode the clip once more just to size the bar). (0, 0.0) when unreadable."""
+    pr = ingest.probe(path, max_seconds=max_seconds, max_wall_s=PROBE_WALL_S)
     return max(0, int(pr.n_frames)), float(pr.fps)
 
 

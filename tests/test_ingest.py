@@ -292,3 +292,18 @@ def test_truncation_warning_only_for_a_cut_stream():
     cut = VideoStream(frames, 30.0, 360, 2, 2, 12.0, "b.mp4", truncated=True, full_duration_s=95.0)
     assert truncation_warning(whole) is None
     assert truncation_warning(cut).startswith("W_TRUNCATED: decoded the first 12s of about 95s")
+
+
+def test_probe_stops_counting_at_its_wall_time_cap_and_extrapolates(monkeypatch):
+    # review 2026-11-08: sizing the progress bar used to grab (decode) up to
+    # 120 s of a WebM before the analysis decoded it again
+    import trubeat.ingest as ingest_mod
+
+    clock = iter(range(10_000))                       # every monotonic() call is one "second" later
+    monkeypatch.setattr(ingest_mod.cv2, "VideoCapture", _FakeWebm)
+    monkeypatch.setattr(ingest_mod.time, "monotonic", lambda: float(next(clock)))
+    capped = ingest_mod.probe("capture.webm", max_seconds=120.0, max_wall_s=0.5)
+    assert capped.estimated and abs(capped.fps - 30.0) < 0.5
+    assert capped.n_frames == round(capped.fps * 120.0)          # an upper bound, never a full pass
+    full = ingest_mod.probe("capture.webm", max_seconds=120.0)  # no cap: counts every frame (20 s)
+    assert not full.estimated and full.n_frames == 600
