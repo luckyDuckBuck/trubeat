@@ -14,6 +14,8 @@ step by step; every step can be rerun and continues where it stopped.
           data/raw is deleted.
   cdf2    Celeb-DF v2's test list and reals into data/raw/cdf2; manifest;
           extract.
+  cdf2-on-disk  extract only the Celeb-DF v2 videos already on disk (no
+          Drive), e.g. `cdf2-on-disk df40 cdf2 select` while a quota holds.
   select  merge the manifests; selection in the app's environment (CPU).
 
 While Google Drive refuses downloads (its "Quota exceeded" notice, which
@@ -218,6 +220,15 @@ def step_df40() -> None:
                          "rerun the df40 step")
 
 
+def step_cdf2_on_disk() -> None:
+    """Extract the Celeb-DF v2 videos already in data/raw/cdf2, without
+    Drive: work to do while a download quota holds (cdf2 fetches the rest,
+    and its extract skips these)."""
+    man = OUT / "manifests" / "cdf2.csv"
+    if len(t.finish_manifest(t.manifest_cdf2(DATA / "cdf2"), man)):
+        extract(man)
+
+
 def step_cdf2() -> None:
     need_gb(4, "Celeb-DF v2 (test list and reals)")
     fetch([VPY, TF2, "fetch", "--root", DATA, "--datasets", "cdf2", "--links", LINKS],
@@ -242,7 +253,8 @@ def step_select() -> None:
     run(cmd)
 
 
-STEPS = {"env": step_env, "ffpp": step_ffpp, "df40": step_df40, "cdf2": step_cdf2, "select": step_select}
+STEPS = {"env": step_env, "ffpp": step_ffpp, "df40": step_df40, "cdf2-on-disk": step_cdf2_on_disk,
+         "cdf2": step_cdf2, "select": step_select}
 
 
 def main() -> None:
