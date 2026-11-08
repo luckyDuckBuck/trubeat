@@ -992,7 +992,7 @@ await guarded(async () => {
   );
   check(
     "caveat says the face-swap detector is evidence only, with its measured false alarms",
-    /evidence only/.test(caveat || "") && /38%/.test(caveat || ""),
+    /evidence only/.test(caveat || "") && /16%/.test(caveat || ""), // v2's gate-4a rate (docs/13 §10)
     caveat
   );
 });

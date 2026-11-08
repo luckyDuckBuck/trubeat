@@ -167,7 +167,7 @@ def test_caveat_states_the_measured_envelope():
     assert "21 generator families" in c and "reports/aigen_detector_v2.md" in c
     assert "5%" in c and "under 2 s" in c  # measured false-alarm rate, scope
     assert "Face2Face" in c and "NeuralTextures" in c
-    assert "evidence only" in c and "38%" in c  # the face-swap detector (docs/12 §9)
+    assert "evidence only" in c and "16%" in c  # the face-swap detector v2's gate-4a rate (docs/13 §10)
     assert "not proof" in c
 
 

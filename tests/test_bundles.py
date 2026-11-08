@@ -76,16 +76,23 @@ def fs_bundle():
 
 
 def _check_threshold_and_references(bundle):
-    """The threshold is the 1 - target_fpr quantile of the bundle's own
-    reference real scores, so the percentile the app shows and the label
-    can never disagree at the operating point."""
+    """Round 3: the threshold is the 1 - target_fpr quantile of the bundle's
+    own reference real scores, so the percentile the app shows and the label
+    can never disagree at the operating point. Round 4 (a ``training_set``
+    key): the threshold is the source-weighted quantile over the out-of-fold
+    reals of every processing variant (docs/13 §6.2), and the reference keeps
+    the clean (v0) ones, which may cross it at most at the target rate."""
     thr = float(bundle["threshold"])
     ref = np.asarray(bundle["real_reference_scores"], dtype=np.float64)
     target_fpr = float(bundle["config"]["target_fpr"])
     assert np.isfinite(thr) and len(ref) >= 100 and np.all(np.isfinite(ref))
     assert np.all(np.diff(ref) >= 0)  # sorted, as analyze's percentile assumes
     assert ref[0] < thr < ref[-1]
-    assert abs(np.mean(ref < thr) - (1.0 - target_fpr)) <= 1.0 / len(ref)
+    share_below = float(np.mean(ref < thr))
+    if "training_set" in bundle:
+        assert share_below >= (1.0 - target_fpr) - 1.0 / len(ref)
+    else:
+        assert abs(share_below - (1.0 - target_fpr)) <= 1.0 / len(ref)
     return thr, ref
 
 
@@ -160,7 +167,7 @@ def test_faceswap_bundle_scores_unit_vectors_of_its_width(fs_bundle):
     _check_scores(scores, thr, ref)
     # a clip's score is the mean crop score: scoring the mean embedding agrees (linear model)
     assert float(scores.mean()) == pytest.approx(float(fs.crop_scores(emb.mean(axis=0, keepdims=True),
-                                                                      fs_bundle)[0]), abs=1e-6)
+                                                                      fs_bundle)[0]), abs=1e-5)   # float32, 1536 dims
 
 
 def test_faceswap_bundle_analyses_a_clip_end_to_end(tmp_path, fs_bundle):
@@ -277,7 +284,10 @@ def test_faceswap_bundle_with_its_real_backbone(tmp_path, monkeypatch, fs_bundle
     assert emb.dim == fs_bundle["model"].n_features_in_  # the bundle fits its backbone
     crops = np.random.default_rng(2).integers(0, 256, (4, 224, 224, 3), dtype=np.uint8)
     e = emb.embed(crops)
-    assert e.shape == (4, emb.dim) and np.allclose(np.linalg.norm(e, axis=1), 1.0, atol=1e-3)
+    assert e.shape == (4, emb.dim)
+    # each part is a unit vector: the CLS token, and for cls+patch also the patch mean (norm sqrt(2) in all)
+    parts = np.split(e, 2, axis=1) if cfg["feature"] == "cls+patch" else [e]
+    assert all(np.allclose(np.linalg.norm(x, axis=1), 1.0, atol=1e-3) for x in parts)
     assert np.all(np.isfinite(fs.crop_scores(e, fs_bundle)))
     p = synth.write_pulse_video(tmp_path / "v.mp4", fps=30.0, duration_s=3.0)
     r = fs.analyze(p, fs_bundle, embedder=emb, finder=_CentreFinder())

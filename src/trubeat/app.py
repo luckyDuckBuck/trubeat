@@ -65,8 +65,9 @@ CAVEAT = (
     "when present. Face-swaps: a weak pulse check can decide (it catches about a "
     "quarter of Deepfakes-style swaps and is blind to reenactment fakes such as "
     "Face2Face and NeuralTextures); a face-swap detector trained on FaceForensics++ "
-    "is shown as evidence only, because it wrongly flagged 38% of real faces from "
-    "other sources (docs/12). 'No sign of AI generation' is not proof a video is real."
+    "and DF40 is shown as evidence only, because it wrongly flagged 16% of real faces "
+    "from other sources (docs/13 §10 and reports/faceswap_gate4a.md). 'No sign of AI "
+    "generation' is not proof a video is real."
 )
 
 # Analysis is capped so a long upload cannot run for an hour.

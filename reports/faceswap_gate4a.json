@@ -1,0 +1,41 @@
+{
+ "bundle": "runs/fsv2/local/result/faceswap_v2.joblib",
+ "bundle_sha256": "fa375d3d7f4ee5b0428b3d0a5eeffde0efa70a0d0fcbf91ea7bbf1963865e8dc",
+ "k": 61,
+ "n": 383,
+ "rate": 0.15926892950391644,
+ "ci": [
+  0.12603035165993037,
+  0.19927488955507855
+ ],
+ "passed": false,
+ "rule": "<= 3% of judged, n judged >= 200, no source above 6%",
+ "per_source": {
+  "aigvdbench": {
+   "k": 18,
+   "n": 197,
+   "rate": 0.09137055837563451,
+   "ci": [
+    0.0585775753969621,
+    0.13979566998646445
+   ],
+   "processed": 391
+  },
+  "genbuster_id": {
+   "k": 43,
+   "n": 186,
+   "rate": 0.23118279569892472,
+   "ci": [
+    0.17640417449724782,
+    0.29684088875548503
+   ],
+   "processed": 315
+  }
+ },
+ "n_processed": 706,
+ "n_scored": 706,
+ "n_not_judged_error": 0,
+ "frozen_manifest": "faceswap_gate4a.csv",
+ "frozen_manifest_sha256": "aefad5de9b9705a7140ddad7486c3123a0098f13e201f57a5e31cd9ad51e75e7",
+ "created": "2026-11-08 23:10"
+}

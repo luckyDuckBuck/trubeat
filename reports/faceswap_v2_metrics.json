@@ -1,0 +1,419 @@
+{
+ "cdf2|v0|reals|test list": [
+  20,
+  178,
+  178
+ ],
+ "cdf2|v0|reals|outside the test list": [
+  63,
+  711,
+  712
+ ],
+ "cdf2|v0|CDF|auc": 0.7777759418374091,
+ "cdf2|v0|CDF|caught": [
+  131,
+  340,
+  340
+ ],
+ "df40|v0|df40:blendface|auc": 0.9159693877551021,
+ "df40|v0|df40:blendface|caught": [
+  48,
+  140,
+  140
+ ],
+ "df40|v0|df40:facedancer|auc": 0.8729081632653061,
+ "df40|v0|df40:facedancer|caught": [
+  42,
+  140,
+  140
+ ],
+ "df40|v0|df40:faceswap|auc": 0.9383673469387754,
+ "df40|v0|df40:faceswap|caught": [
+  79,
+  140,
+  140
+ ],
+ "df40|v0|df40:facevid2vid|auc": 0.8951020408163266,
+ "df40|v0|df40:facevid2vid|caught": [
+  45,
+  140,
+  140
+ ],
+ "df40|v0|df40:fomm|auc": 0.9552551020408163,
+ "df40|v0|df40:fomm|caught": [
+  68,
+  140,
+  140
+ ],
+ "df40|v0|df40:inswap|auc": 0.9219733656174334,
+ "df40|v0|df40:inswap|caught": [
+  51,
+  118,
+  118
+ ],
+ "df40|v0|df40:mobileswap|auc": 0.940765306122449,
+ "df40|v0|df40:mobileswap|caught": [
+  66,
+  140,
+  140
+ ],
+ "df40|v0|df40:pirender|auc": 0.902704081632653,
+ "df40|v0|df40:pirender|caught": [
+  32,
+  140,
+  140
+ ],
+ "df40|v0|df40:simswap|auc": 0.9233163265306122,
+ "df40|v0|df40:simswap|caught": [
+  50,
+  140,
+  140
+ ],
+ "df40|v0|df40:uniface|auc": 0.9715306122448979,
+ "df40|v0|df40:uniface|caught": [
+  84,
+  140,
+  140
+ ],
+ "df40|v0|df40:wav2lip|auc": 0.6810204081632653,
+ "df40|v0|df40:wav2lip|caught": [
+  2,
+  140,
+  140
+ ],
+ "df40cdf|v0|df40:blendface|auc": 0.7333108361454819,
+ "df40cdf|v0|df40:blendface|caught": [
+  43,
+  150,
+  150
+ ],
+ "df40cdf|v0|df40:facedancer|auc": 0.8454518185226847,
+ "df40cdf|v0|df40:facedancer|caught": [
+  88,
+  150,
+  150
+ ],
+ "df40cdf|v0|df40:faceswap|auc": 0.9831950536384294,
+ "df40cdf|v0|df40:faceswap|caught": [
+  139,
+  149,
+  150
+ ],
+ "df40cdf|v0|df40:fsgan|auc": 0.9044844394450693,
+ "df40cdf|v0|df40:fsgan|caught": [
+  104,
+  150,
+  150
+ ],
+ "df40cdf|v0|df40:inswap|auc": 0.7446794150731159,
+ "df40cdf|v0|df40:inswap|caught": [
+  49,
+  150,
+  150
+ ],
+ "df40cdf|v0|df40:mobileswap|auc": 0.7808923884514436,
+ "df40cdf|v0|df40:mobileswap|caught": [
+  60,
+  150,
+  150
+ ],
+ "df40cdf|v0|df40:simswap|auc": 0.6930633670791151,
+ "df40cdf|v0|df40:simswap|caught": [
+  45,
+  150,
+  150
+ ],
+ "df40cdf|v0|df40:uniface|auc": 0.7969328833895764,
+ "df40cdf|v0|df40:uniface|caught": [
+  60,
+  150,
+  150
+ ],
+ "dfd|c40|reals|all": [
+  14,
+  150,
+  150
+ ],
+ "dfd|c40|DFD|auc": 0.6821252796420582,
+ "dfd|c40|DFD|caught": [
+  67,
+  298,
+  300
+ ],
+ "dfd|v0|reals|all": [
+  7,
+  150,
+  150
+ ],
+ "dfd|v0|DFD|auc": 0.8185507246376811,
+ "dfd|v0|DFD|caught": [
+  140,
+  299,
+  300
+ ],
+ "dfd|v1|reals|all": [
+  10,
+  149,
+  150
+ ],
+ "dfd|v1|DFD|auc": 0.5804804194065939,
+ "dfd|v1|DFD|caught": [
+  33,
+  297,
+  300
+ ],
+ "dfd|v2|reals|all": [
+  11,
+  149,
+  150
+ ],
+ "dfd|v2|DFD|auc": 0.7313416084936365,
+ "dfd|v2|DFD|caught": [
+  79,
+  299,
+  300
+ ],
+ "dfd|v3|reals|all": [
+  11,
+  150,
+  150
+ ],
+ "dfd|v3|DFD|auc": 0.7938888888888889,
+ "dfd|v3|DFD|caught": [
+  120,
+  300,
+  300
+ ],
+ "dfd|v4|reals|all": [
+  13,
+  150,
+  150
+ ],
+ "dfd|v4|DFD|auc": 0.7024749163879598,
+ "dfd|v4|DFD|caught": [
+  79,
+  299,
+  300
+ ],
+ "ffpp|c40|reals|all": [
+  3,
+  140,
+  140
+ ],
+ "ffpp|c40|Deepfakes|auc": 0.9373469387755102,
+ "ffpp|c40|Deepfakes|caught": [
+  88,
+  140,
+  140
+ ],
+ "ffpp|c40|Face2Face|auc": 0.812704081632653,
+ "ffpp|c40|Face2Face|caught": [
+  40,
+  140,
+  140
+ ],
+ "ffpp|c40|FaceShifter|auc": 0.8585204081632654,
+ "ffpp|c40|FaceShifter|caught": [
+  46,
+  140,
+  140
+ ],
+ "ffpp|c40|FaceSwap|auc": 0.8941326530612245,
+ "ffpp|c40|FaceSwap|caught": [
+  66,
+  140,
+  140
+ ],
+ "ffpp|c40|NeuralTextures|auc": 0.7018367346938775,
+ "ffpp|c40|NeuralTextures|caught": [
+  19,
+  140,
+  140
+ ],
+ "ffpp|v0|reals|all": [
+  1,
+  140,
+  140
+ ],
+ "ffpp|v0|Deepfakes|auc": 0.973265306122449,
+ "ffpp|v0|Deepfakes|caught": [
+  103,
+  140,
+  140
+ ],
+ "ffpp|v0|Face2Face|auc": 0.911326530612245,
+ "ffpp|v0|Face2Face|caught": [
+  67,
+  140,
+  140
+ ],
+ "ffpp|v0|FaceShifter|auc": 0.9152551020408163,
+ "ffpp|v0|FaceShifter|caught": [
+  52,
+  140,
+  140
+ ],
+ "ffpp|v0|FaceSwap|auc": 0.9383673469387754,
+ "ffpp|v0|FaceSwap|caught": [
+  79,
+  140,
+  140
+ ],
+ "ffpp|v0|NeuralTextures|auc": 0.8325510204081633,
+ "ffpp|v0|NeuralTextures|caught": [
+  23,
+  140,
+  140
+ ],
+ "ffpp|v1|reals|all": [
+  3,
+  140,
+  140
+ ],
+ "ffpp|v1|Deepfakes|auc": 0.9329081632653061,
+ "ffpp|v1|Deepfakes|caught": [
+  83,
+  140,
+  140
+ ],
+ "ffpp|v1|Face2Face|auc": 0.8205102040816326,
+ "ffpp|v1|Face2Face|caught": [
+  38,
+  140,
+  140
+ ],
+ "ffpp|v1|FaceShifter|auc": 0.8126530612244899,
+ "ffpp|v1|FaceShifter|caught": [
+  27,
+  140,
+  140
+ ],
+ "ffpp|v1|FaceSwap|auc": 0.8988775510204081,
+ "ffpp|v1|FaceSwap|caught": [
+  51,
+  140,
+  140
+ ],
+ "ffpp|v1|NeuralTextures|auc": 0.7125,
+ "ffpp|v1|NeuralTextures|caught": [
+  13,
+  140,
+  140
+ ],
+ "ffpp|v2|reals|all": [
+  2,
+  140,
+  140
+ ],
+ "ffpp|v2|Deepfakes|auc": 0.968469387755102,
+ "ffpp|v2|Deepfakes|caught": [
+  104,
+  140,
+  140
+ ],
+ "ffpp|v2|Face2Face|auc": 0.8745408163265307,
+ "ffpp|v2|Face2Face|caught": [
+  53,
+  140,
+  140
+ ],
+ "ffpp|v2|FaceShifter|auc": 0.8996938775510205,
+ "ffpp|v2|FaceShifter|caught": [
+  51,
+  140,
+  140
+ ],
+ "ffpp|v2|FaceSwap|auc": 0.9339285714285714,
+ "ffpp|v2|FaceSwap|caught": [
+  88,
+  140,
+  140
+ ],
+ "ffpp|v2|NeuralTextures|auc": 0.7799489795918367,
+ "ffpp|v2|NeuralTextures|caught": [
+  16,
+  140,
+  140
+ ],
+ "ffpp|v3|reals|all": [
+  1,
+  140,
+  140
+ ],
+ "ffpp|v3|Deepfakes|auc": 0.9751020408163265,
+ "ffpp|v3|Deepfakes|caught": [
+  107,
+  140,
+  140
+ ],
+ "ffpp|v3|Face2Face|auc": 0.9032653061224489,
+ "ffpp|v3|Face2Face|caught": [
+  60,
+  140,
+  140
+ ],
+ "ffpp|v3|FaceShifter|auc": 0.9145918367346939,
+ "ffpp|v3|FaceShifter|caught": [
+  57,
+  140,
+  140
+ ],
+ "ffpp|v3|FaceSwap|auc": 0.9391326530612245,
+ "ffpp|v3|FaceSwap|caught": [
+  85,
+  140,
+  140
+ ],
+ "ffpp|v3|NeuralTextures|auc": 0.8152040816326532,
+ "ffpp|v3|NeuralTextures|caught": [
+  20,
+  140,
+  140
+ ],
+ "ffpp|v4|reals|all": [
+  0,
+  140,
+  140
+ ],
+ "ffpp|v4|Deepfakes|auc": 0.965204081632653,
+ "ffpp|v4|Deepfakes|caught": [
+  97,
+  140,
+  140
+ ],
+ "ffpp|v4|Face2Face|auc": 0.8627040816326531,
+ "ffpp|v4|Face2Face|caught": [
+  48,
+  140,
+  140
+ ],
+ "ffpp|v4|FaceShifter|auc": 0.8761734693877551,
+ "ffpp|v4|FaceShifter|caught": [
+  48,
+  140,
+  140
+ ],
+ "ffpp|v4|FaceSwap|auc": 0.9235714285714285,
+ "ffpp|v4|FaceSwap|caught": [
+  74,
+  140,
+  140
+ ],
+ "ffpp|v4|NeuralTextures|auc": 0.7716326530612246,
+ "ffpp|v4|NeuralTextures|caught": [
+  18,
+  140,
+  140
+ ],
+ "uadfv|v0|reals|all": [
+  3,
+  49,
+  49
+ ],
+ "uadfv|v0|UADFV|auc": 0.8699237270665842,
+ "uadfv|v0|UADFV|caught": [
+  59,
+  99,
+  100
+ ]
+}

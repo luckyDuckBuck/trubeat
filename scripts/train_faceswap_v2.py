@@ -1621,7 +1621,9 @@ def cmd_ship(a) -> None:
     }
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(b, a.out)
-    Path(a.decision).write_text(json.dumps({"outcome": outcome, "why": why, "out": a.out,
+    out = Path(a.out).resolve()   # repo-relative in the tracked report: no local home path
+    shown = str(out.relative_to(REPO)) if out.is_relative_to(REPO) else str(a.out)
+    Path(a.decision).write_text(json.dumps({"outcome": outcome, "why": why, "out": shown,
                                             "created": time.strftime("%Y-%m-%d %H:%M")}, indent=1))
     log(f"shipped {src.name} -> {a.out}: mode {outcome}")
 

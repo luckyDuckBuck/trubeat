@@ -1,0 +1,6 @@
+{
+ "outcome": "evidence",
+ "why": "gates 1, 2, 2b passed; 4a. frozen list, 3b. Celeb-DF v2 test list: AUC >= 0.75 and reals flagged <= 8% of judged, 4b. Celeb-DF v2 reals outside the test list flagged <= 5% of judged failed; gate-4a rate 15.9% [..19.9%] is below round 3's 38.3% [33.0%..] with non-overlapping intervals",
+ "out": "src/trubeat/models/faceswap.joblib",
+ "created": "2026-11-08 23:14"
+}

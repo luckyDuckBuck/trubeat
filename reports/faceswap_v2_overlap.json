@@ -1,0 +1,15 @@
+{
+ "created": "2026-11-08 22:41",
+ "backbone": "vit_base_patch16_clip_224.openai",
+ "threshold": 0.97,
+ "df40_training_clips": 2400,
+ "gate4a_clips": 706,
+ "gate4a_with_face": 440,
+ "gate4a_errors": [],
+ "max_cosine_gate4a": {
+  "median": 0.7383772134780884,
+  "p99": 0.8650250136852264,
+  "max": 0.8784762620925903
+ },
+ "hits": []
+}
