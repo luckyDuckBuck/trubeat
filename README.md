@@ -102,8 +102,9 @@ result), so heart rate and pulse SNR are shown as evidence only.
 machine and never leave it. `trubeat serve` listens on 127.0.0.1 only;
 `--host 0.0.0.0` lets other devices on your network upload to it (it prints
 a warning). Uploads stay in Gradio's temporary folder for about an hour at
-most, and the extension's captures are deleted as soon as their analysis
-returns. `--share` publishes a temporary Gradio link:
+most, and the extension's captures are deleted about two minutes after their
+analysis returns (time for the extension to ask again if the connection
+drops). `--share` publishes a temporary Gradio link:
 **uploads to a shared instance leave the machine**, so use it for demos only,
 never for real faces.
 

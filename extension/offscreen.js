@@ -861,18 +861,16 @@ async function analyzeClip(msg) {
     const got = await readEventStream(base, plan.apiName, call.eventId, deadline);
     if (got.outcome === "result") {
       if (attempts > 1 && captureGone(got.verdict)) {
-        fail(
-          "The connection to your backend dropped during the analysis, and when the extension asked " +
-            "again the backend no longer had the recording (it deletes each recording once it has " +
-            "analysed it). Check the tab again."
-        );
+        fail(GONE_TEXT);
         return;
       }
       report({ type: "ANALYSIS_RESULT", result: got.verdict, capture, note });
       return;
     }
     if (got.outcome === "error") {
-      fail(got.message);
+      // on a re-POST, an error is almost always the recording gone (the backend
+      // keeps each one for about two minutes after analysing it, or it restarted)
+      fail(attempts > 1 ? `${GONE_TEXT} (${got.message})` : got.message);
       return;
     }
     if (got.outcome === "deadline") {
@@ -1002,7 +1000,12 @@ async function readEventStream(base, apiName, eventId, deadline) {
   }
 }
 
-/** A re-run that found the uploaded file gone (the first run deleted it). */
+const GONE_TEXT =
+  "The connection to your backend dropped during the analysis, and when the extension asked again " +
+  "the backend no longer had the recording (it deletes each recording about two minutes after " +
+  "analysing it, and a restart clears them). Check the tab again.";
+
+/** A re-run that found the uploaded file gone (deleted after its grace period). */
 function captureGone(result) {
   return !!(result && result.layers && typeof result.layers.file === "string");
 }

@@ -1955,6 +1955,23 @@ await guarded(async () => {
     );
   }
 
+  // (i2) The retry's POST fails in the backend (Gradio cannot find the upload any
+  // more: kept about two minutes, or the server restarted): the same readable text.
+  {
+    const { posted } = await run(({ attempt, signal, clock }) =>
+      streamOf(attempt === 1 ? [{ drop: true }] : [{ text: errorEvent({ error: "File not found", visible: true }) }])({
+        signal,
+        clock,
+      })
+    );
+    check(
+      "an error on the re-POST says the recording is gone, with the backend's own message",
+      posted && posted.type === "CAPTURE_ERROR" && /no longer had the recording/.test(posted.message) &&
+        /File not found/.test(posted.message),
+      JSON.stringify(posted)
+    );
+  }
+
   // (j) A chunk boundary in the middle of an event, CRLF line endings.
   {
     const text = completeEvent(VERDICT).replace(/\n/g, "\r\n");

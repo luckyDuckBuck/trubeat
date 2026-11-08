@@ -572,3 +572,23 @@ def test_untracked_face_is_flagged_as_unstable(tmp_path, no_aigen):
     p = synth.write_pulse_video(tmp_path / "noface.mp4", fps=30.0, duration_s=11.0)
     a = app_mod.analyze_video(p, config={"method": "green"}, layers=("pulse",))
     assert any(w.startswith("W_UNSTABLE_TRACK") for w in a.warnings)
+
+
+def test_a_capture_outlives_its_analysis_long_enough_for_a_retry(tmp_path):
+    # review 2026-11-08: analyze_json deleted the capture in its `finally`, so the
+    # extension's re-POST after a dropped event stream could never succeed
+    import time
+
+    cap = tmp_path / "truebeat-capture.webm"
+    cap.write_bytes(b"x")
+    key = str(cap)
+    app_mod._hold_capture(key)
+    app_mod._release_capture(key, grace_s=0.3)      # the first run ends
+    app_mod._hold_capture(key)                      # the retry starts within the grace period
+    time.sleep(0.5)
+    assert cap.exists()                             # never deleted while an analysis of it runs
+    app_mod._release_capture(key, grace_s=0.05)
+    deadline = time.time() + 2.0
+    while cap.exists() and time.time() < deadline:
+        time.sleep(0.02)
+    assert not cap.exists() and key not in app_mod._CAPTURES

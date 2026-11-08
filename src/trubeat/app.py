@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
 from functools import lru_cache
@@ -1117,9 +1118,52 @@ def parse_region(text: str | None) -> tuple[float, float, float, float] | None:
 
 # Uploads (and the rendered face image) live in Gradio's cache; files older
 # than this are deleted every few minutes (docs/13 A-04). The extension's
-# captures are deleted as soon as their analysis returns.
+# captures are deleted CAPTURE_GRACE_S after their last analysis returns:
+# when the event stream drops, the extension POSTs the same upload again
+# (offscreen.js, up to 3 attempts), and that retry must still find it.
 UPLOAD_MAX_AGE_S = 3600
 UPLOAD_SWEEP_S = 300
+CAPTURE_GRACE_S = 120.0
+_CAPTURES: dict[str, list] = {}       # path -> [analyses running on it, pending deletion timer]
+_CAPTURES_LOCK = threading.Lock()
+
+
+def _hold_capture(path: str) -> None:
+    """An analysis of ``path`` starts: no deletion while it runs."""
+    with _CAPTURES_LOCK:
+        entry = _CAPTURES.setdefault(path, [0, None])
+        entry[0] += 1
+        if entry[1] is not None:
+            entry[1].cancel()
+            entry[1] = None
+
+
+def _release_capture(path: str, grace_s: float | None = None) -> None:
+    """An analysis of ``path`` ended: delete it after the grace period,
+    unless another analysis of it starts first."""
+    with _CAPTURES_LOCK:
+        entry = _CAPTURES.get(path)
+        if entry is None:
+            return
+        entry[0] = max(0, entry[0] - 1)
+        if entry[0] > 0:
+            return
+        timer = threading.Timer(CAPTURE_GRACE_S if grace_s is None else grace_s, _delete_capture, args=(path,))
+        timer.daemon = True
+        entry[1] = timer
+        timer.start()
+
+
+def _delete_capture(path: str) -> None:
+    with _CAPTURES_LOCK:
+        entry = _CAPTURES.get(path)
+        if entry is None or entry[0] > 0:
+            return
+        _CAPTURES.pop(path, None)
+    try:
+        Path(path).unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def build_demo(
@@ -1213,17 +1257,19 @@ def build_demo(
         # FileData the upload flow sends.
         def analyze_json(video_path, region_text=None):
             """The extension's call: analyse the uploaded capture (optionally only
-            the video element's region), then delete the capture (docs/13 A-04)."""
+            the video element's region). The capture is deleted CAPTURE_GRACE_S
+            after its last analysis ends (docs/13 A-04), so the extension's retry
+            after a dropped event stream still finds it."""
+            key = str(video_path) if video_path else ""
+            if key:
+                _hold_capture(key)
             try:
                 a = analyze_video(video_path, cfg, model_path=model_path, thresholds=thresholds,
                                   region=parse_region(region_text))
                 return json.dumps(api_payload(a))
             finally:
-                try:
-                    if video_path:
-                        Path(video_path).unlink(missing_ok=True)
-                except OSError:
-                    pass
+                if key:
+                    _release_capture(key)
 
         api_btn = gr.Button(visible=False)
         api_out = gr.Textbox(label="result", visible=False)
