@@ -163,3 +163,71 @@ def test_ship_writes_the_claims_the_app_quotes(tmp_path):
     assert c["outside_fpr"]["k"] == 4 and c["outside_fpr"]["n"] == 250
     text = claims.caveat(None, None, c, fsd_mode=b["mode"])
     assert "trained on FaceForensics++ and DF40 is shown as evidence only" in text and "2% of real faces" in text
+
+
+class _RangeNotSupported(Exception):
+    pass
+
+
+_RangeNotSupported.__name__ = "RangeNotSupported"   # the name remotezip's exception carries
+
+
+def _fake_remotezip(monkeypatch, refuse_after: int):
+    """A remotezip stand-in: reads succeed, then every read gets Drive's quota page."""
+    import types
+
+    calls = {"reads": 0}
+
+    class RemoteZip:
+        def __init__(self, url):
+            pass
+
+        def read(self, m):
+            calls["reads"] += 1
+            if calls["reads"] > refuse_after:
+                raise _RangeNotSupported("The server doesn't support range requests")
+            return b"clip"
+
+        def infolist(self):
+            raise _RangeNotSupported("The server doesn't support range requests")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def close(self):
+            pass
+
+    monkeypatch.setitem(sys.modules, "remotezip", types.SimpleNamespace(RemoteZip=RemoteZip))
+    monkeypatch.setattr(t.time, "sleep", lambda s: pytest.fail("a refused read must not be retried"))
+    return calls
+
+
+def test_a_drive_quota_page_stops_the_fetch_instead_of_retrying_each_clip(tmp_path, monkeypatch):
+    calls = _fake_remotezip(monkeypatch, refuse_after=2)
+    members = [f"m/{i:03d}.mp4" for i in range(40)]
+    with pytest.raises(t.DriveQuota):
+        t.fetch_zip_members("https://drive.example/zip", members, tmp_path, threads=1)
+    assert sorted(p.name for p in (tmp_path / "m").iterdir()) == ["000.mp4", "001.mp4"]   # kept for the rerun
+    assert calls["reads"] == 3          # the first refusal ends it: no read per remaining clip
+    with pytest.raises(t.DriveQuota):
+        t.zip_index("https://drive.example/zip")
+
+
+def test_the_laptop_runner_waits_out_a_drive_quota_and_stops_on_other_failures(monkeypatch):
+    import run_fsv2_local as r
+
+    logged, slept, ready, codes = [], [], iter([False, True, True]), iter([t.QUOTA_EXIT, 0])
+    monkeypatch.setattr(r, "log", logged.append)              # never the real run.log
+    monkeypatch.setattr(r.time, "sleep", slept.append)
+    monkeypatch.setattr(r.t, "drive_ready", lambda url: next(ready))
+    monkeypatch.setattr(r.subprocess, "run", lambda *a, **k: __import__("types").SimpleNamespace(returncode=next(codes)))
+    r.fetch(["fetch"], "https://drive.example/zip", "DF40 x")
+    assert slept == [r.DRIVE_WAIT_S, r.DRIVE_WAIT_S]          # probe refused, then fetch refused, then done
+    assert sum("refuses downloads" in m for m in logged) == 2
+    monkeypatch.setattr(r.t, "drive_ready", lambda url: True)
+    monkeypatch.setattr(r.subprocess, "run", lambda *a, **k: __import__("types").SimpleNamespace(returncode=1))
+    with pytest.raises(SystemExit, match="exit 1"):
+        r.fetch(["fetch"], "https://drive.example/zip", "DF40 x")

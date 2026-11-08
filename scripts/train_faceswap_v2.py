@@ -156,6 +156,34 @@ def drive_url(file_id: str) -> str:
     return f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm=t"
 
 
+QUOTA_EXIT = 4   # `fetch` exits with this when Google Drive refuses downloads for now
+
+
+class DriveQuota(RuntimeError):
+    """Google Drive answered a byte-range read with a page instead of the
+    bytes: its "Quota exceeded" notice ("too many users have viewed or
+    downloaded this file recently"), which can last up to 24 hours (seen
+    2026-11-08 on every DF40 zip at once). Retrying clip by clip only adds
+    requests, so the fetch stops and the caller waits."""
+
+
+def drive_refused(exc: BaseException) -> bool:
+    """remotezip raises RangeNotSupported when a range read gets a 200 page."""
+    return type(exc).__name__ == "RangeNotSupported"
+
+
+def drive_ready(url: str, timeout: float = 30.0) -> bool:
+    """One 100-byte range read: True when Drive serves the file's bytes (206)."""
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers={"Range": "bytes=0-99"}),
+                                    timeout=timeout) as r:
+            return r.status == 206
+    except Exception:  # noqa: BLE001 - unreachable counts as not ready
+        return False
+
+
 def fetch_zip_members(url: str, members: list[str], dest: Path, threads: int = 6,
                       attempts: int = 6) -> tuple[int, list[str]]:
     """Copy the named members of a remote stored zip into ``dest`` (same
@@ -163,7 +191,9 @@ def fetch_zip_members(url: str, members: list[str], dest: Path, threads: int = 6
 
     Each thread opens the zip once (reading its central directory) and reuses
     it: Google Drive answers 503 when the directory is re-read quickly, so a
-    failed read reopens only that thread's handle, after a growing pause."""
+    failed read reopens only that thread's handle, after a growing pause.
+    When Drive refuses downloads outright (its quota notice), the remaining
+    reads are skipped and DriveQuota is raised once the threads finish."""
     import threading
 
     from remotezip import RemoteZip
@@ -173,9 +203,12 @@ def fetch_zip_members(url: str, members: list[str], dest: Path, threads: int = 6
         return 0, []
     failed: list[str] = []
     local = threading.local()
+    refused = threading.Event()
 
     def one(m: str) -> bool:
         for attempt in range(attempts):
+            if refused.is_set():
+                return False
             try:
                 if getattr(local, "z", None) is None:
                     local.z = RemoteZip(url)
@@ -193,6 +226,11 @@ def fetch_zip_members(url: str, members: list[str], dest: Path, threads: int = 6
                         z.close()
                     except Exception:  # noqa: BLE001, S110 - a broken handle is dropped either way
                         pass
+                if drive_refused(exc):
+                    if not refused.is_set():
+                        refused.set()
+                        log(f"  Google Drive refuses downloads (read of {m}: {type(exc).__name__}); stopping")
+                    return False
                 if attempt == attempts - 1:
                     log(f"  failed {m}: {type(exc).__name__}: {str(exc)[:200]}")
                     break
@@ -204,6 +242,8 @@ def fetch_zip_members(url: str, members: list[str], dest: Path, threads: int = 6
         for f in as_completed(futs):
             if not f.result():
                 failed.append(futs[f])
+    if refused.is_set():
+        raise DriveQuota(f"{len(todo) - len(failed)} of {len(todo)} clips fetched before Drive refused")
     return len(todo) - len(failed), failed
 
 
@@ -217,6 +257,8 @@ def zip_index(url: str, attempts: int = 6) -> list[str]:
             with RemoteZip(url) as z:
                 return [i.filename for i in z.infolist()]
         except Exception as exc:  # retried, then raised
+            if drive_refused(exc):
+                raise DriveQuota("the zip listing was refused") from exc
             if attempt == attempts - 1:
                 raise
             log(f"  zip listing failed ({type(exc).__name__}: {str(exc)[:120]}); retry {attempt + 1}")
@@ -1623,8 +1665,12 @@ def main() -> None:
     sh.add_argument("--out", default=str(REPO / "src/trubeat/models/faceswap.joblib"))
     sh.add_argument("--decision", default=str(REPO / "reports/faceswap_v2_decision.json"))
     a = ap.parse_args()
-    {"fetch": cmd_fetch, "manifest": cmd_manifest, "extract": cmd_extract, "select": cmd_select,
-     "overlap": cmd_overlap, "ship": cmd_ship}[a.cmd](a)
+    try:
+        {"fetch": cmd_fetch, "manifest": cmd_manifest, "extract": cmd_extract, "select": cmd_select,
+         "overlap": cmd_overlap, "ship": cmd_ship}[a.cmd](a)
+    except DriveQuota as exc:   # clips already fetched are kept; a later rerun fetches the rest
+        log(f"Google Drive refuses downloads for now (quota exceeded: {exc}); rerun later")
+        raise SystemExit(QUOTA_EXIT) from exc
 
 
 if __name__ == "__main__":

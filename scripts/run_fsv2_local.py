@@ -16,6 +16,12 @@ step by step; every step can be rerun and continues where it stopped.
           extract.
   select  merge the manifests; selection in the app's environment (CPU).
 
+While Google Drive refuses downloads (its "Quota exceeded" notice, which
+can last up to 24 h: every DF40 zip from 06:12 on 2026-11-08), the df40 and
+cdf2 steps wait, one 100-byte probe per half hour for up to 36 h, then go
+on. The df40 step stops the run if any zip is still incomplete, so select
+never runs on part of DF40.
+
 Usage (from the repo root, in the app's environment):
     uv run python scripts/run_fsv2_local.py env
     uv run python scripts/run_fsv2_local.py ffpp df40 cdf2 select
@@ -62,6 +68,31 @@ def run(cmd: list) -> None:
     cmd = [str(c) for c in cmd]
     log("$ " + " ".join(cmd))
     subprocess.run(cmd, check=True, cwd=REPO)
+
+
+DRIVE_WAIT_S = 30 * 60        # Drive's "Quota exceeded" can last up to 24 h: look again every half hour
+DRIVE_MAX_WAIT_S = 36 * 3600
+
+
+def fetch(cmd: list, url: str, what: str) -> None:
+    """Run a `fetch` call that reads from Google Drive. While Drive refuses
+    downloads (a failed 100-byte probe, or `fetch` exiting with QUOTA_EXIT),
+    wait and try again, one probe per half hour, up to 36 h; any other
+    failure stops the run."""
+    t0 = time.time()
+    while True:
+        if t.drive_ready(url):
+            cmd = [str(c) for c in cmd]
+            log("$ " + " ".join(cmd))
+            code = subprocess.run(cmd, cwd=REPO, check=False).returncode
+            if code == 0:
+                return
+            if code != t.QUOTA_EXIT:
+                raise SystemExit(f"{what}: fetch failed (exit {code})")
+        if time.time() - t0 > DRIVE_MAX_WAIT_S:
+            raise SystemExit(f"{what}: Google Drive still refuses downloads after {DRIVE_MAX_WAIT_S // 3600} h")
+        log(f"{what}: Google Drive refuses downloads for now (quota exceeded); next try in {DRIVE_WAIT_S // 60} min")
+        time.sleep(DRIVE_WAIT_S)
 
 
 def need_gb(gb: float, what: str) -> None:
@@ -137,9 +168,10 @@ def step_df40() -> None:
     if not LINKS.is_file():
         raise SystemExit(f"{LINKS} is missing (the dataset links, kept out of the repo)")
     plan_path = OUT / "df40_plan.json"
+    ids = json.loads(LINKS.read_text())["df40_ids"]
     if not plan_path.is_file():  # the same picks `fetch` makes in one call (fixed seed), saved once
-        run([VPY, TF2, "fetch", "--root", TMP, "--datasets", "df40", "--links", LINKS, "--df40-plan", plan_path,
-             "--plan-only"])
+        fetch([VPY, TF2, "fetch", "--root", TMP, "--datasets", "df40", "--links", LINKS, "--df40-plan", plan_path,
+               "--plan-only"], t.drive_url(next(iter(ids.values()))), "DF40 plan")
     plan = json.loads(plan_path.read_text())
     log(f"DF40 plan: {sum(len(v) for v in plan.values())} videos from {len(plan)} zips")
     incomplete = []
@@ -154,8 +186,8 @@ def step_df40() -> None:
         if members:
             need_gb(8, key)
             for attempt in range(3):      # Drive may refuse reads for a while (503): pause and fetch again
-                run([VPY, TF2, "fetch", "--root", TMP, "--datasets", "df40", "--links", LINKS,
-                     "--df40-plan", plan_path, "--only", key])
+                fetch([VPY, TF2, "fetch", "--root", TMP, "--datasets", "df40", "--links", LINKS,
+                       "--df40-plan", plan_path, "--only", key], t.drive_url(ids[key]), f"DF40 {key}")
                 missing = [m for m in members if not (zdir / m).is_file()]
                 if not missing:
                     break
@@ -181,13 +213,15 @@ def step_df40() -> None:
         done.write_text(f"{len(members)} planned\n")
         log(f"DF40 {key}: done")
     (OUT / "df40_incomplete.json").write_text(json.dumps(incomplete, indent=1))
-    if incomplete:
-        log(f"DF40: {len(incomplete)} zips incomplete (runs/fsv2/local/df40_incomplete.json); rerun the df40 step")
+    if incomplete:   # stop here: the steps after this one (select) must not run on part of DF40
+        raise SystemExit(f"DF40: {len(incomplete)} zips incomplete (runs/fsv2/local/df40_incomplete.json); "
+                         "rerun the df40 step")
 
 
 def step_cdf2() -> None:
     need_gb(4, "Celeb-DF v2 (test list and reals)")
-    run([VPY, TF2, "fetch", "--root", DATA, "--datasets", "cdf2", "--links", LINKS])
+    fetch([VPY, TF2, "fetch", "--root", DATA, "--datasets", "cdf2", "--links", LINKS],
+          t.drive_url(json.loads(LINKS.read_text())["cdf2_id"]), "Celeb-DF v2")
     man = OUT / "manifests" / "cdf2.csv"
     t.finish_manifest(t.manifest_cdf2(DATA / "cdf2"), man)
     extract(man)
@@ -218,7 +252,11 @@ def main() -> None:
     steps = list(STEPS) if "all" in a.steps else a.steps
     for s in steps:
         log(f"== step {s}")
-        STEPS[s]()
+        try:
+            STEPS[s]()
+        except SystemExit as exc:   # recorded in run.log, and the steps after it do not run
+            log(f"== step {s} stopped: {exc}")
+            raise
         log(f"== step {s} done")
 
 
