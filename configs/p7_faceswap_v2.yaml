@@ -83,7 +83,7 @@ selection:
   lopso_max_fpr: 0.06
   sources: [v0, c40, v1, v2, v3, v4]
   seeds: [7, 11, 13]
-  n_jobs: 4
+  n_jobs: 2              # parallel fits; 4 ran the 7 GB laptop out of memory (2026-11-08); results do not depend on it
 
 # DF40 (docs/13 §3.2): face-swap methods trained on (FF++ train/val identities),
 # the methods scored on FF++ test identities (gate 1b), and the report-only sets.
