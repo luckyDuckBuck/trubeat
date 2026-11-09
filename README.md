@@ -259,6 +259,35 @@ Human gates of the first build (env, dataset forms/downloads, ROI glance,
 gate reviews) are collected in `reports/HUMAN_GATES.md`; each later round
 lists its own (docs/11 §6, docs/12 §2, docs/13 §9).
 
+## Datasets and credits
+
+TrueBeat is built on public research datasets. Thank you to their authors.
+No video from any of them is redistributed here. The full terms are in
+[NOTICE](NOTICE), section 4.
+
+**Trained on** (the shipped models):
+
+| dataset | used for | terms | credit |
+|---|---|---|---|
+| [FaceForensics++](https://github.com/ondyari/FaceForensics), with the DeepFakes Detection Dataset by Google & Jigsaw | the pulse check (`detector.joblib`), the face-swap detector (`faceswap.joblib`) and the AI-video detector's real clips (`aigen.joblib`); DeepFakeDetection is a test set only | non-commercial research and educational use | A. Rössler, D. Cozzolino, L. Verdoliva, C. Riess, J. Thies, M. Nießner, "FaceForensics++: Learning to Detect Manipulated Facial Images", ICCV 2019 ([arXiv:1901.08971](https://arxiv.org/abs/1901.08971)); N. Dufour, A. Gully et al., "DeepFakes Detection Dataset", Google & Jigsaw, 2019 |
+| [DF40](https://github.com/YZY-stack/DF40) | the face-swap detector's fakes (eight face-swap methods); its test sets measure it | CC BY-NC 4.0 | Z. Yan et al., "DF40: Toward Next-Generation Deepfake Detection", NeurIPS 2024 Datasets and Benchmarks Track ([arXiv:2406.13495](https://arxiv.org/abs/2406.13495)) |
+| [AIGVDBench](https://huggingface.co/datasets/AIGVDBench/AIGVDBench) | the AI-video detector's training clips | CC BY 4.0 | L. Ma, Z. Xue et al., "Your One-Stop Solution for AI-Generated Video Detection", CVPR 2026 ([arXiv:2601.11035](https://arxiv.org/abs/2601.11035)) |
+| [OpenVid-1M](https://huggingface.co/datasets/nkp37/OpenVid-1M) | the real clips inside AIGVDBench | CC BY 4.0; its card says it is for research and non-commercial purposes | K. Nan et al., "OpenVid-1M: A Large-Scale High-Quality Dataset for Text-to-video Generation", ICLR 2025 ([arXiv:2407.02371](https://arxiv.org/abs/2407.02371)) |
+| [Rapidata text-to-video human-preference sets](https://huggingface.co/datasets/Rapidata/text-2-video-human-preferences) | 1,492 clips from 14 current generators (Veo, Seedance, Marey, Ray 2, Gen-3, Sora, Pika, HunyuanVideo, Wan, Mochi) for the AI-video detector | Apache-2.0 | [Rapidata](https://rapidata.ai) |
+
+**Tested on** (measurements only; nothing shipped is trained on them):
+
+| dataset | used for | terms | credit |
+|---|---|---|---|
+| [GenBuster-Bench](https://huggingface.co/datasets/l8cv/GenBuster-Bench) | the AI-video detector's held-out test, and real clips for the face-swap detector's false-alarm test | MIT | H. Wen et al., "BusterX: MLLM-Powered AI-Generated Video Forgery Detection and Explanation", 2025 ([arXiv:2505.12620](https://arxiv.org/abs/2505.12620)) |
+| [Celeb-DF v2](https://github.com/yuezunli/celeb-deepfakeforensics) | the face-swap detector's cross-dataset test | research use, under its access form | Y. Li, X. Yang, P. Sun, H. Qi, S. Lyu, "Celeb-DF: A Large-scale Challenging Dataset for DeepFake Forensics", CVPR 2020 ([arXiv:1909.12962](https://arxiv.org/abs/1909.12962)) |
+| UADFV (in DF40's test set) | a report-only face-swap test | research use | X. Yang, Y. Li, S. Lyu, "Exposing Deep Fakes Using Inconsistent Head Poses", ICASSP 2019 ([arXiv:1811.00661](https://arxiv.org/abs/1811.00661)) |
+| [UBFC-rPPG](https://sites.google.com/view/ybenezeth/ubfcrppg) | the heart-rate check | its authors' terms (subjects 21 and 27 may not be shown) | S. Bobbia, R. Macwan, Y. Benezeth, A. Mansouri, J. Dubois, "Unsupervised skin tissue segmentation for remote photoplethysmography", Pattern Recognition Letters 124, 2019 |
+
+The models build on DINOv2 (Meta AI), CLIP ViT-B/16 (OpenAI), the MediaPipe
+Face Landmarker (Google) and YuNet (OpenCV Zoo). NOTICE sections 2 and 3
+list their licences.
+
 ## License
 
 The code is MIT: see [LICENSE](LICENSE). The trained models in

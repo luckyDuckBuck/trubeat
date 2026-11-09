@@ -160,6 +160,8 @@ AIGVDBench (Hugging Face dataset AIGVDBench/AIGVDBench)
   Training data of aigen.joblib; every clip was re-encoded to 360p
   (CRF 28) before features were taken, and no clip is redistributed. Its
   real clips are OpenVid-1M clips.
+  L. Ma, Z. Xue et al., "Your One-Stop Solution for AI-Generated Video
+  Detection", CVPR 2026 (arXiv:2601.11035).
 
 OpenVid-1M (the real clips in AIGVDBench; not used by round 4,
 docs/13 §6.6 item 9)
@@ -168,15 +170,35 @@ docs/13 §6.6 item 9)
   K. Nan et al., "OpenVid-1M: A Large-Scale High-Quality Dataset for
   Text-to-video Generation", ICLR 2025.
 
-Rapidata text-to-video human-preference sets (Hugging Face, Rapidata)
-  Apache License 2.0. Training data of aigen.joblib (docs/11 §9.7).
+Rapidata text-to-video human-preference sets (Hugging Face,
+Rapidata/text-2-video-human-preferences and its per-model sets)
+  Apache License 2.0. Training data of aigen.joblib (docs/11 §9.7): 1,492
+  clips from 14 generators. Credit: Rapidata (https://rapidata.ai).
 
 Used to measure only; nothing trained on them is shipped:
-  GenBuster-Bench (MIT): the AI-video detector's held-out set and part of
-  the face-swap detector's false-alarm test. UBFC-rPPG: the heart-rate
-  check; its terms forbid showing subjects 21 and 27. Celeb-DF v2
-  (round 4, test only, under the terms accepted in its access form).
-  UADFV (round 4, optional, report only; research use).
+
+GenBuster-Bench (Hugging Face l8cv/GenBuster-Bench)
+  MIT License. The AI-video detector's held-out set and part of the
+  face-swap detector's false-alarm test.
+  H. Wen, Y. He, Z. Huang, T. Li, Z. Yu, X. Huang, L. Qi, B. Wu, X. Li
+  and G. Cheng, "BusterX: MLLM-Powered AI-Generated Video Forgery
+  Detection and Explanation", 2025 (arXiv:2505.12620).
+
+Celeb-DF v2
+  Round 4, test only, under the terms accepted in its access form.
+  Y. Li, X. Yang, P. Sun, H. Qi and S. Lyu, "Celeb-DF: A Large-scale
+  Challenging Dataset for DeepFake Forensics", CVPR 2020.
+
+UADFV (distributed in DF40's test set)
+  Round 4, report only; research use.
+  X. Yang, Y. Li and S. Lyu, "Exposing Deep Fakes Using Inconsistent Head
+  Poses", ICASSP 2019.
+
+UBFC-rPPG
+  The heart-rate check; its terms forbid showing subjects 21 and 27.
+  S. Bobbia, R. Macwan, Y. Benezeth, A. Mansouri and J. Dubois,
+  "Unsupervised skin tissue segmentation for remote photoplethysmography",
+  Pattern Recognition Letters 124, 2019.
 
 
 5. Not part of this repository
