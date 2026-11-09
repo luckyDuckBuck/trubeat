@@ -321,8 +321,9 @@ Run through this after loading the extension.
 - [ ] DevTools → Network: while checking a tab, the **only** requests are to
       the configured backend. No third-party hosts, no analytics.
 - [ ] `chrome://extensions` → service worker → Console: no errors.
-- [ ] After a check, the backend's upload folder (`/tmp/gradio/…` by
-      default) no longer holds the capture.
+- [ ] About two minutes after a check, the backend's upload folder
+      (`/tmp/gradio/…` by default) no longer holds the capture (it is kept
+      that long so the extension can ask again if the connection drops).
 - [ ] Reload the extension: no captured video appears anywhere on disk
       (`chrome.storage.local` holds only the two settings).
 
