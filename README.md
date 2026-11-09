@@ -252,7 +252,8 @@ This round also brought the audit fixes (local-only by default; Content
 Credentials decide only when their signature validates) and the
 extension's v1.3.0 capture: the tab at its full resolution, up to
 1920×1080, with only the playing video's area analysed when it stays put.
-v1.3.0 is not released yet. Results: `docs/13` §10.
+It was released as v1.3.0 on 2026-11-09
+([releases](https://github.com/luckyDuckBuck/trubeat/releases/tag/extension-v1.3.0)). Results: `docs/13` §10.
 
 Human gates of the first build (env, dataset forms/downloads, ROI glance,
 gate reviews) are collected in `reports/HUMAN_GATES.md`; each later round
